@@ -208,6 +208,14 @@ static inline bool __has_cursum_space(struct f2fs_summary_block *sum, int size,
 #define F2FS_IOC_GETFLAGS		FS_IOC_GETFLAGS
 #define F2FS_IOC_SETFLAGS		FS_IOC_SETFLAGS
 #define F2FS_IOC_GETVERSION		FS_IOC_GETVERSION
+#define FS_IOC_SHUTDOWN	_IOR('X', 125, __u32)	/* Shutdown */
+
+/*
+ * Flags for going down operation used by FS_IOC_GOINGDOWN
+ */
+#define FS_GOING_DOWN_FULLSYNC	0x0	/* going down with full sync */
+#define FS_GOING_DOWN_METASYNC	0x1	/* going down with metadata */
+#define FS_GOING_DOWN_NOSYNC	0x2	/* going down */
 
 #define F2FS_IOCTL_MAGIC		0xf5
 #define F2FS_IOC_START_ATOMIC_WRITE	_IO(F2FS_IOCTL_MAGIC, 1)
@@ -1366,8 +1374,8 @@ extern unsigned char f2fs_filetype_table[F2FS_FT_MAX];
 void set_de_type(struct f2fs_dir_entry *, struct inode *);
 struct f2fs_dir_entry *find_target_dentry(struct qstr *, int *,
 			struct f2fs_dentry_ptr *);
-bool f2fs_fill_dentries(struct dir_context *, struct f2fs_dentry_ptr *,
-			unsigned int);
+bool f2fs_fill_dentries(struct file *, void *, filldir_t,
+			struct f2fs_dentry_ptr *, unsigned int, unsigned int);
 void do_make_empty_dir(struct inode *, struct inode *,
 			struct f2fs_dentry_ptr *);
 struct page *init_inode_metadata(struct inode *, struct inode *,
@@ -1698,5 +1706,5 @@ int f2fs_add_inline_entry(struct inode *, const struct qstr *, struct inode *);
 void f2fs_delete_inline_entry(struct f2fs_dir_entry *, struct page *,
 						struct inode *, struct inode *);
 bool f2fs_empty_inline_dir(struct inode *);
-int f2fs_read_inline_dir(struct file *, struct dir_context *);
+int f2fs_read_inline_dir(struct file *, void *, filldir_t);
 #endif
