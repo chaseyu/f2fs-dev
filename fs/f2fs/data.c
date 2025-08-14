@@ -1351,6 +1351,7 @@ struct folio *f2fs_find_data_folio(struct inode *inode, pgoff_t index,
 {
 	struct address_space *mapping = inode->i_mapping;
 	struct folio *folio;
+	int ret;
 
 	folio = f2fs_filemap_get_folio(mapping, index, FGP_ACCESSED, 0);
 	if (IS_ERR(folio))
@@ -1367,7 +1368,10 @@ read:
 	if (folio_test_uptodate(folio))
 		return folio;
 
-	folio_wait_locked(folio);
+	ret = folio_wait_locked_killable(folio);
+	if (ret)
+		return ERR_PTR(ret);
+
 	if (unlikely(!folio_test_uptodate(folio))) {
 		f2fs_folio_put(folio, false);
 		return ERR_PTR(-EIO);

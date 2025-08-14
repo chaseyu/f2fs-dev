@@ -1582,7 +1582,9 @@ repeat:
 	if (parent)
 		f2fs_ra_node_pages(parent, start + 1, MAX_RA_NODE);
 
-	folio_lock(folio);
+	err = folio_lock_killable(folio);
+	if (err)
+		goto out_put;
 
 	if (unlikely(!is_node_folio(folio))) {
 		f2fs_folio_put(folio, true);
@@ -1608,6 +1610,7 @@ out_put_err:
 	/* ENOENT comes from read_node_folio which is not an error. */
 	if (err != -ENOENT)
 		f2fs_handle_page_eio(sbi, folio, NODE);
+out_put:
 	f2fs_folio_put(folio, true);
 	return ERR_PTR(err);
 }
