@@ -1553,10 +1553,10 @@ int f2fs_map_blocks(struct inode *inode, struct f2fs_map_blocks *map, int flag)
 	struct dnode_of_data dn;
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	int mode = map->m_may_create ? ALLOC_NODE : LOOKUP_NODE;
-	pgoff_t pgofs, end_offset, end;
+	pgoff_t pgofs, end_offset, end, mballoc_pgofs;
 	int err = 0, ofs = 1;
 	unsigned int ofs_in_node, last_ofs_in_node;
-	blkcnt_t prealloc;
+	blkcnt_t prealloc, phyalloc;
 	block_t blkaddr;
 	unsigned int start_pgofs;
 	int bidx = 0;
@@ -1581,6 +1581,7 @@ int f2fs_map_blocks(struct inode *inode, struct f2fs_map_blocks *map, int flag)
 
 	/* it only supports block size == page size */
 	pgofs =	(pgoff_t)map->m_lblk;
+	mballoc_pgofs = pgofs;
 	end = pgofs + maxblocks;
 
 	if (flag == F2FS_GET_BLOCK_PRECACHE)
@@ -1606,6 +1607,7 @@ next_dnode:
 
 	start_pgofs = pgofs;
 	prealloc = 0;
+	phyalloc = 0;
 	last_ofs_in_node = ofs_in_node = dn.ofs_in_node;
 	end_offset = ADDRS_PER_PAGE(dn.node_folio, inode);
 
@@ -1628,6 +1630,9 @@ next_block:
 		}
 
 		switch (flag) {
+		case F2FS_GET_BLOCK_MBA:
+			phyalloc++;
+			fallthrough;
 		case F2FS_GET_BLOCK_PRE_AIO:
 			if (blkaddr == NULL_ADDR) {
 				prealloc++;
@@ -1686,7 +1691,8 @@ next_block:
 		}
 	}
 
-	if (flag == F2FS_GET_BLOCK_PRE_AIO)
+	if (flag == F2FS_GET_BLOCK_PRE_AIO ||
+		flag == F2FS_GET_BLOCK_MBA)
 		goto skip;
 
 	if (map->m_multidev_dio)
@@ -1736,6 +1742,50 @@ skip:
 			goto sync_out;
 		}
 		dn.ofs_in_node = end_offset;
+	}
+
+	if (flag == F2FS_GET_BLOCK_MBA &&
+			(pgofs == end || dn.ofs_in_node == end_offset)) {
+		struct node_info ni;
+		block_t blkstart;
+		int blklen;
+
+		err = f2fs_get_node_info(sbi, dn.nid, &ni, false);
+		if (err)
+			return err;
+
+		dn.ofs_in_node = ofs_in_node;
+		err = f2fs_reserve_new_blocks(&dn, prealloc);
+		if (err)
+			goto sync_out;
+
+		if (prealloc && dn.ofs_in_node != last_ofs_in_node + 1) {
+			err = -ENOSPC;
+			goto sync_out;
+		}
+		dn.ofs_in_node = ofs_in_node;
+
+		map->m_len += phyalloc;
+
+		while (phyalloc) {
+			blklen = f2fs_allocate_data_blocks(sbi, &dn, &blkstart,
+					phyalloc, map->m_seg_type, ni.version);
+			if (blklen < 0) {
+				err = blklen;
+				goto sync_out;
+			}
+
+			f2fs_update_read_extent_cache_range(&dn,
+					mballoc_pgofs, blkstart, blklen);
+
+			f2fs_set_data_blkaddrs(&dn, blkstart, blklen);
+
+			mballoc_pgofs += blklen;
+			phyalloc -= blklen;
+			dn.ofs_in_node += blklen;
+		}
+
+		map->m_pblk = blkstart + blklen - map->m_len;
 	}
 
 	if (pgofs >= end)

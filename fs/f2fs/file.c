@@ -1931,7 +1931,7 @@ next_alloc:
 		}
 
 		map.m_seg_type = CURSEG_COLD_DATA_PINNED;
-		err = f2fs_map_blocks(inode, &map, F2FS_GET_BLOCK_PRE_DIO);
+		err = f2fs_map_blocks(inode, &map, F2FS_GET_BLOCK_MBA);
 		file_dont_truncate(inode);
 
 		f2fs_up_write(&sbi->pin_sem);

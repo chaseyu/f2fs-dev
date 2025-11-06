@@ -3918,6 +3918,113 @@ out_err:
 	return ret;
 }
 
+int f2fs_allocate_data_blocks(struct f2fs_sb_info *sbi,
+			struct dnode_of_data *dn, block_t *blkstart,
+			int blklen, int type, unsigned char version)
+{
+	struct sit_info *sit_i = SIT_I(sbi);
+	struct curseg_info *curseg = CURSEG_I(sbi, type);
+	unsigned int seg_blkoff;
+	int i;
+	int ret = 0;
+
+	f2fs_down_read(&SM_I(sbi)->curseg_lock);
+	mutex_lock(&curseg->curseg_mutex);
+	down_write(&sit_i->sentry_lock);
+
+	if (curseg->segno == NULL_SEGNO) {
+		ret = -ENOSPC;
+		goto out;
+	}
+	f2fs_bug_on(sbi, curseg->next_blkoff >= BLKS_PER_SEG(sbi));
+	f2fs_bug_on(sbi, curseg->alloc_type == SSR);
+
+	*blkstart = NEXT_FREE_BLKADDR(sbi, curseg);
+	seg_blkoff = curseg->next_blkoff;
+
+	blklen = min_t(int, blklen, sbi->blocks_per_seg - curseg->next_blkoff);
+	curseg->next_blkoff += blklen;
+
+	/*
+	 * SIT information should be updated before segment allocation,
+	 * since SSR needs latest valid block information.
+	 */
+	for (i = 0; i < blklen; i++) {
+		block_t blkaddr = f2fs_data_blkaddr(dn);
+
+		if (!__is_valid_data_blkaddr(blkaddr))
+			continue;
+
+		update_sit_entry(sbi, blkaddr, -1);
+		update_segment_mtime(sbi, blkaddr, 0);
+	}
+
+	for (i = 0; i < blklen; i++) {
+		struct f2fs_summary *sum =
+			curseg->sum_blk->entries + seg_blkoff + i;
+
+		set_summary(sum, dn->nid, dn->ofs_in_node + i, version);
+		f2fs_wait_discard_bio(sbi, *blkstart + i);
+	}
+	update_sit_entry(sbi, *blkstart, blklen);
+	stat_inc_block_counts(sbi, curseg, blklen);
+	update_segment_mtime(sbi, *blkstart, 0);
+
+	/*
+	 * If the current segment is full, flush it out and replace it with a
+	 * new segment.
+	 */
+	if (curseg->next_blkoff >= f2fs_usable_blks_in_seg(sbi, curseg->segno)) {
+		if (type == CURSEG_COLD_DATA_PINNED &&
+		    !((curseg->segno + 1) % sbi->segs_per_sec)) {
+			write_sum_page(sbi, curseg->sum_blk, curseg->segno);
+			reset_curseg_fields(curseg);
+			goto skip_new_segment;
+		}
+
+		if (need_new_seg(sbi, type))
+			ret = new_curseg(sbi, type, false);
+		else
+			ret = change_curseg(sbi, type);
+		stat_inc_seg_type(sbi, curseg);
+
+		if (ret)
+			goto out;
+	}
+
+skip_new_segment:
+	/*
+	 * segment dirty status should be updated after segment allocation,
+	 * so we just need to update status only one time after previous
+	 * segment being closed.
+	 */
+	for (i = 0; i < blklen; i++) {
+		block_t blkaddr = f2fs_data_blkaddr(dn);
+
+		if (!__is_valid_data_blkaddr(blkaddr))
+			continue;
+
+		locate_dirty_segment(sbi, GET_SEGNO(sbi, blkaddr + i));
+	}
+	locate_dirty_segment(sbi, GET_SEGNO(sbi, *blkstart));
+
+	/* caller should handle age extent */
+	if (IS_DATASEG(curseg->seg_type)) {
+		unsigned long long new_val;
+
+		new_val = atomic64_add_return_acquire(blklen,
+				&sbi->allocated_data_blocks);
+		if (unlikely(new_val == ULLONG_MAX))
+			atomic64_set(&sbi->allocated_data_blocks, 0);
+	}
+
+out:
+	up_write(&sit_i->sentry_lock);
+	mutex_unlock(&curseg->curseg_mutex);
+	f2fs_up_read(&SM_I(sbi)->curseg_lock);
+	return ret ? ret : blklen;
+}
+
 void f2fs_update_device_state(struct f2fs_sb_info *sbi, nid_t ino,
 					block_t blkaddr, unsigned int blkcnt)
 {

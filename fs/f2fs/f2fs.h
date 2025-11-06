@@ -799,6 +799,7 @@ enum {
 	F2FS_GET_BLOCK_PRE_DIO,
 	F2FS_GET_BLOCK_PRE_AIO,
 	F2FS_GET_BLOCK_PRECACHE,
+	F2FS_GET_BLOCK_MBA,		/* multiple blocks allocation */
 };
 
 /*
@@ -3943,6 +3944,9 @@ int f2fs_allocate_data_block(struct f2fs_sb_info *sbi, struct folio *folio,
 			block_t old_blkaddr, block_t *new_blkaddr,
 			struct f2fs_summary *sum, int type,
 			struct f2fs_io_info *fio);
+int f2fs_allocate_data_blocks(struct f2fs_sb_info *sbi,
+			struct dnode_of_data *dn, block_t *blkstart,
+			int blklen, int type, unsigned char version);
 void f2fs_update_device_state(struct f2fs_sb_info *sbi, nid_t ino,
 					block_t blkaddr, unsigned int blkcnt);
 void f2fs_folio_wait_writeback(struct folio *folio, enum page_type type,
@@ -4290,6 +4294,8 @@ static inline struct f2fs_stat_info *F2FS_STAT(struct f2fs_sb_info *sbi)
 		((sbi)->segment_count[(curseg)->alloc_type]++)
 #define stat_inc_block_count(sbi, curseg)				\
 		((sbi)->block_count[(curseg)->alloc_type]++)
+#define stat_inc_block_counts(sbi, curseg, num)				\
+		((sbi)->block_count[(curseg)->alloc_type] += num)
 #define stat_inc_inplace_blocks(sbi)					\
 		(atomic_inc(&(sbi)->inplace_count))
 #define stat_update_max_atomic_write(inode)				\
