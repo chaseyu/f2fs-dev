@@ -1145,6 +1145,7 @@ void f2fs_update_data_blkaddr(struct dnode_of_data *dn, block_t blkaddr)
 int f2fs_reserve_new_blocks(struct dnode_of_data *dn, blkcnt_t count)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(dn->inode);
+	__le32 *addr;
 	int err;
 
 	if (!count)
@@ -1161,14 +1162,16 @@ int f2fs_reserve_new_blocks(struct dnode_of_data *dn, blkcnt_t count)
 
 	f2fs_folio_wait_writeback(dn->node_folio, NODE, true, true);
 
-	for (; count > 0; dn->ofs_in_node++) {
-		block_t blkaddr = f2fs_data_blkaddr(dn);
+	addr = get_dnode_addr(dn->inode, dn->node_folio);
 
-		if (blkaddr == NULL_ADDR) {
-			__set_data_blkaddr(dn, NEW_ADDR);
+	for (; count > 0; dn->ofs_in_node++) {
+		if (le32_to_cpu(addr[dn->ofs_in_node]) == NULL_ADDR) {
+			addr[dn->ofs_in_node] = cpu_to_le32(NEW_ADDR);
 			count--;
 		}
 	}
+
+	dn->data_blkaddr = NEW_ADDR;
 
 	if (folio_mark_dirty(dn->node_folio))
 		dn->node_changed = true;
