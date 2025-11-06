@@ -614,7 +614,7 @@ static int f2fs_reserve_new_block_retry(struct dnode_of_data *dn)
 	int i, err = 0;
 
 	for (i = DEFAULT_FAILURE_RETRY_COUNT; i > 0; i--) {
-		err = f2fs_reserve_new_block(dn);
+		err = f2fs_reserve_new_blocks(dn, 1);
 		if (!err)
 			break;
 	}

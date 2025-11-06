@@ -1629,7 +1629,6 @@ static int f2fs_do_zero_range(struct dnode_of_data *dn, pgoff_t start,
 	if (ret)
 		return ret;
 
-	dn->ofs_in_node = ofs_in_node;
 	for (index = start; index < end; index++, dn->ofs_in_node++) {
 		dn->data_blkaddr = f2fs_data_blkaddr(dn);
 		/*
