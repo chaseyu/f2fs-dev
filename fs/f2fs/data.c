@@ -1168,14 +1168,13 @@ int f2fs_reserve_new_blocks(struct dnode_of_data *dn, blkcnt_t count)
 
 	f2fs_folio_wait_writeback(dn->node_folio, NODE, true, true);
 
-	addr = get_dnode_addr(dn->inode, dn->node_folio) + dn->ofs_in_node;
+	addr = get_dnode_addr(dn->inode, dn->node_folio);
 
-	while (count) {
-		if (le32_to_cpu(*addr) == NULL_ADDR) {
-			*addr = cpu_to_le32(NEW_ADDR);
+	for (; count > 0; dn->ofs_in_node++) {
+		if (le32_to_cpu(addr[dn->ofs_in_node]) == NULL_ADDR) {
+			addr[dn->ofs_in_node] = cpu_to_le32(NEW_ADDR);
 			count--;
 		}
-		addr++;
 	}
 
 	dn->data_blkaddr = NEW_ADDR;
@@ -1183,6 +1182,17 @@ int f2fs_reserve_new_blocks(struct dnode_of_data *dn, blkcnt_t count)
 	if (folio_mark_dirty(dn->node_folio))
 		dn->node_changed = true;
 	return 0;
+}
+
+/* Should keep dn->ofs_in_node unchanged */
+int f2fs_reserve_new_block(struct dnode_of_data *dn)
+{
+	unsigned int ofs_in_node = dn->ofs_in_node;
+	int ret;
+
+	ret = f2fs_reserve_new_blocks(dn, 1);
+	dn->ofs_in_node = ofs_in_node;
+	return ret;
 }
 
 int f2fs_reserve_block(struct dnode_of_data *dn, pgoff_t index)
@@ -1195,7 +1205,7 @@ int f2fs_reserve_block(struct dnode_of_data *dn, pgoff_t index)
 		return err;
 
 	if (dn->data_blkaddr == NULL_ADDR)
-		err = f2fs_reserve_new_blocks(dn, 1);
+		err = f2fs_reserve_new_block(dn);
 	if (err || need_put)
 		f2fs_put_dnode(dn);
 	return err;
@@ -1726,7 +1736,7 @@ skip:
 		if (err)
 			goto sync_out;
 
-		map->m_len += last_ofs_in_node + 1 - ofs_in_node;
+		map->m_len += dn.ofs_in_node - ofs_in_node;
 		if (prealloc && dn.ofs_in_node != last_ofs_in_node + 1) {
 			err = -ENOSPC;
 			goto sync_out;
