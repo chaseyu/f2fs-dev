@@ -1113,12 +1113,20 @@ static void f2fs_submit_page_read(struct inode *inode, struct folio *folio,
 	f2fs_submit_read_bio(sbi, bio, DATA);
 }
 
-static void __set_data_blkaddr(struct dnode_of_data *dn, block_t blkaddr)
+static void f2fs_set_data_blkaddrs(struct dnode_of_data *dn, block_t blkaddr,
+							unsigned int len)
 {
-	__le32 *addr = get_dnode_addr(dn->inode, dn->node_folio);
+	__le32 *addr;
+	int i;
 
-	dn->data_blkaddr = blkaddr;
-	addr[dn->ofs_in_node] = cpu_to_le32(dn->data_blkaddr);
+	f2fs_folio_wait_writeback(dn->node_folio, NODE, true, true);
+
+	addr = get_dnode_addr(dn->inode, dn->node_folio);
+	for (i = 0; i < len; i++)
+		addr[dn->ofs_in_node + i] = cpu_to_le32(blkaddr + i);
+
+	if (folio_mark_dirty(dn->node_folio))
+		dn->node_changed = true;
 }
 
 /*
@@ -1129,10 +1137,8 @@ static void __set_data_blkaddr(struct dnode_of_data *dn, block_t blkaddr)
  */
 void f2fs_set_data_blkaddr(struct dnode_of_data *dn, block_t blkaddr)
 {
-	f2fs_folio_wait_writeback(dn->node_folio, NODE, true, true);
-	__set_data_blkaddr(dn, blkaddr);
-	if (folio_mark_dirty(dn->node_folio))
-		dn->node_changed = true;
+	f2fs_set_data_blkaddrs(dn, blkaddr, 1);
+	dn->data_blkaddr = blkaddr;
 }
 
 void f2fs_update_data_blkaddr(struct dnode_of_data *dn, block_t blkaddr)
