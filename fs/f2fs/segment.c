@@ -2447,8 +2447,9 @@ static void update_segment_mtime(struct f2fs_sb_info *sbi, block_t blkaddr,
  * NOTE: when updating multiple blocks at the same time, please ensure
  * that the consecutive input blocks belong to the same segment.
  */
-static int update_sit_entry_for_release(struct f2fs_sb_info *sbi, struct seg_entry *se,
-				unsigned int segno, block_t blkaddr, unsigned int offset, int del)
+static int free_sit_entry(struct f2fs_sb_info *sbi, struct seg_entry *se,
+				unsigned int segno, block_t blkaddr,
+				unsigned int offset, int del)
 {
 	bool exist;
 #ifdef CONFIG_F2FS_CHECK_FS
@@ -2506,8 +2507,9 @@ static int update_sit_entry_for_release(struct f2fs_sb_info *sbi, struct seg_ent
 	return del;
 }
 
-static int update_sit_entry_for_alloc(struct f2fs_sb_info *sbi, struct seg_entry *se,
-				unsigned int segno, block_t blkaddr, unsigned int offset, int del)
+static int alloc_sit_entry(struct f2fs_sb_info *sbi, struct seg_entry *se,
+				unsigned int segno, block_t blkaddr,
+				unsigned int offset, int del)
 {
 	bool exist;
 #ifdef CONFIG_F2FS_CHECK_FS
@@ -2584,11 +2586,10 @@ static void update_sit_entry(struct f2fs_sb_info *sbi, block_t blkaddr, int del)
 	se->valid_blocks = new_vblocks;
 
 	/* Update valid block bitmap */
-	if (del > 0) {
-		del = update_sit_entry_for_alloc(sbi, se, segno, blkaddr, offset, del);
-	} else {
-		del = update_sit_entry_for_release(sbi, se, segno, blkaddr, offset, del);
-	}
+	if (del > 0)
+		del = alloc_sit_entry(sbi, se, segno, blkaddr, offset, del);
+	else
+		del = free_sit_entry(sbi, se, segno, blkaddr, offset, del);
 
 	__mark_sit_entry_dirty(sbi, segno);
 
