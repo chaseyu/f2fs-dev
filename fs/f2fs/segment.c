@@ -2515,44 +2515,50 @@ static int alloc_sit_entry(struct f2fs_sb_info *sbi, struct seg_entry *se,
 #ifdef CONFIG_F2FS_CHECK_FS
 	bool mir_exist;
 #endif
+	int i;
+	int del_count = del;
 
-	exist = f2fs_test_and_set_bit(offset, se->cur_valid_map);
+	f2fs_bug_on(sbi, GET_SEGNO(sbi, blkaddr) != GET_SEGNO(sbi, blkaddr + del - 1));
+
+	for (i = 0; i < del_count; i++) {
+		exist = f2fs_test_and_set_bit(offset + i, se->cur_valid_map);
 #ifdef CONFIG_F2FS_CHECK_FS
-	mir_exist = f2fs_test_and_set_bit(offset,
-					se->cur_valid_map_mir);
-	if (unlikely(exist != mir_exist)) {
-		f2fs_err(sbi, "Inconsistent error when setting bitmap, blk:%u, old bit:%d",
-			blkaddr, exist);
-		f2fs_bug_on(sbi, 1);
-	}
+		mir_exist = f2fs_test_and_set_bit(offset + i,
+						se->cur_valid_map_mir);
+		if (unlikely(exist != mir_exist)) {
+			f2fs_err(sbi, "Inconsistent error when setting bitmap, blk:%u, old bit:%d",
+				blkaddr + i, exist);
+			f2fs_bug_on(sbi, 1);
+		}
 #endif
-	if (unlikely(exist)) {
-		f2fs_err(sbi, "Bitmap was wrongly set, blk:%u", blkaddr);
-		f2fs_bug_on(sbi, 1);
-		se->valid_blocks--;
-		del = 0;
-	}
+		if (unlikely(exist)) {
+			f2fs_err(sbi, "Bitmap was wrongly set, blk:%u", blkaddr + i);
+			f2fs_bug_on(sbi, 1);
+			se->valid_blocks--;
+			del -= 1;
+		}
 
-	if (f2fs_block_unit_discard(sbi) &&
-			!f2fs_test_and_set_bit(offset, se->discard_map))
-		sbi->discard_blks--;
+		if (f2fs_block_unit_discard(sbi) &&
+				!f2fs_test_and_set_bit(offset + i, se->discard_map))
+			sbi->discard_blks--;
 
-	/*
-	 * SSR should never reuse block which is checkpointed
-	 * or newly invalidated.
-	 */
-	if (!is_sbi_flag_set(sbi, SBI_CP_DISABLED)) {
-		if (!f2fs_test_and_set_bit(offset, se->ckpt_valid_map)) {
+		/*
+		 * SSR should never reuse block which is checkpointed
+		 * or newly invalidated.
+		 */
+		if (!is_sbi_flag_set(sbi, SBI_CP_DISABLED)) {
+			if (!f2fs_test_and_set_bit(offset + i, se->ckpt_valid_map)) {
+				se->ckpt_valid_blocks++;
+				if (__is_large_section(sbi))
+					get_sec_entry(sbi, segno)->ckpt_valid_blocks++;
+			}
+		}
+
+		if (!f2fs_test_bit(offset + i, se->ckpt_valid_map)) {
 			se->ckpt_valid_blocks++;
 			if (__is_large_section(sbi))
 				get_sec_entry(sbi, segno)->ckpt_valid_blocks++;
 		}
-	}
-
-	if (!f2fs_test_bit(offset, se->ckpt_valid_map)) {
-		se->ckpt_valid_blocks += del;
-		if (__is_large_section(sbi))
-			get_sec_entry(sbi, segno)->ckpt_valid_blocks += del;
 	}
 
 	if (__is_large_section(sbi))
