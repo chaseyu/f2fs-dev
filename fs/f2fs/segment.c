@@ -3902,9 +3902,11 @@ skip_new_segment:
 
 		INIT_LIST_HEAD(&fio->list);
 		fio->in_list = 1;
+		init_completion(&fio->wait);
 		io = sbi->write_io[fio->type] + fio->temp;
 		spin_lock(&io->io_lock);
 		list_add_tail(&fio->list, &io->io_list);
+		fio->io_seqno = io->io_seqno++;
 		spin_unlock(&io->io_lock);
 	}
 

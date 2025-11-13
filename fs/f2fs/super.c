@@ -183,6 +183,7 @@ enum {
 	Opt_jqfmt,
 	Opt_checkpoint,
 	Opt_lookup_mode,
+	Opt_io_thread,
 	Opt_err,
 };
 
@@ -311,6 +312,7 @@ static const struct fs_parameter_spec f2fs_param_specs[] = {
 	fsparam_flag("age_extent_cache", Opt_age_extent_cache),
 	fsparam_enum("errors", Opt_errors, f2fs_param_errors),
 	fsparam_enum("lookup_mode", Opt_lookup_mode, f2fs_param_lookup_mode),
+	fsparam_flag("io_thread", Opt_io_thread),
 	{}
 };
 
@@ -1183,6 +1185,9 @@ static int f2fs_parse_param(struct fs_context *fc, struct fs_parameter *param)
 		F2FS_CTX_INFO(ctx).lookup_mode = result.uint_32;
 		ctx->spec_mask |= F2FS_SPEC_lookup_mode;
 		break;
+	case Opt_io_thread:
+		ctx_set_opt(ctx, F2FS_MOUNT_IO_THREAD);
+		break;
 	}
 	return 0;
 }
@@ -2035,8 +2040,17 @@ static void f2fs_put_super(struct super_block *sb)
 	fscrypt_free_dummy_policy(&F2FS_OPTION(sbi).dummy_enc_policy);
 	destroy_percpu_info(sbi);
 	f2fs_destroy_iostat(sbi);
-	for (i = 0; i < NR_PAGE_TYPE; i++)
+	for (i = 0; i < NR_PAGE_TYPE; i++) {
+		int n = (i == META) ? 1 : NR_TEMP_TYPE;
+		int j;
+
+		for (j = HOT; j < n; j++) {
+			if (!sbi->write_io[i])
+				continue;
+			kthread_stop(sbi->write_io[i][j].io_submit_thread);
+		}
 		kfree(sbi->write_io[i]);
+	}
 #if IS_ENABLED(CONFIG_UNICODE)
 	utf8_unload(sb->s_encoding);
 #endif
@@ -2483,6 +2497,9 @@ static int f2fs_show_options(struct seq_file *seq, struct dentry *root)
 	else if (F2FS_OPTION(sbi).lookup_mode == LOOKUP_AUTO)
 		seq_show_option(seq, "lookup_mode", "auto");
 
+	if (test_opt(sbi, IO_THREAD))
+		seq_puts(seq, ",io_thread");
+
 	return 0;
 }
 
@@ -2534,10 +2551,12 @@ static void default_options(struct f2fs_sb_info *sbi, bool remount)
 	F2FS_OPTION(sbi).unusable_cap = 0;
 	if (!f2fs_is_readonly(sbi))
 		set_opt(sbi, FLUSH_MERGE);
-	if (f2fs_sb_has_blkzoned(sbi))
+	if (f2fs_sb_has_blkzoned(sbi)) {
 		F2FS_OPTION(sbi).fs_mode = FS_MODE_LFS;
-	else
+		set_opt(sbi, IO_THREAD);
+	} else {
 		F2FS_OPTION(sbi).fs_mode = FS_MODE_ADAPTIVE;
+	}
 
 #ifdef CONFIG_F2FS_FS_XATTR
 	set_opt(sbi, XATTR_USER);
@@ -2726,6 +2745,7 @@ static int __f2fs_remount(struct fs_context *fc, struct super_block *sb)
 	bool no_compress_cache = !test_opt(sbi, COMPRESS_CACHE);
 	bool block_unit_discard = f2fs_block_unit_discard(sbi);
 	bool no_nat_bits = !test_opt(sbi, NAT_BITS);
+	bool io_thread = !test_opt(sbi, IO_THREAD);
 #ifdef CONFIG_QUOTA
 	int i, j;
 #endif
@@ -2845,6 +2865,12 @@ static int __f2fs_remount(struct fs_context *fc, struct super_block *sb)
 	if (no_nat_bits == !!test_opt(sbi, NAT_BITS)) {
 		err = -EINVAL;
 		f2fs_warn(sbi, "switch nat_bits option is not allowed");
+		goto restore_opts;
+	}
+
+	if (io_thread == !!test_opt(sbi, IO_THREAD)) {
+		err = -EINVAL;
+		f2fs_warn(sbi, "switch io_thread option is not allowed");
 		goto restore_opts;
 	}
 
@@ -5357,8 +5383,17 @@ free_percpu:
 free_iostat:
 	f2fs_destroy_iostat(sbi);
 free_bio_info:
-	for (i = 0; i < NR_PAGE_TYPE; i++)
+	for (i = 0; i < NR_PAGE_TYPE; i++) {
+		int n = (i == META) ? 1 : NR_TEMP_TYPE;
+		int j;
+
+		for (j = HOT; j < n; j++) {
+			if (!sbi->write_io[i])
+				continue;
+			kthread_stop(sbi->write_io[i][j].io_submit_thread);
+		}
 		kfree(sbi->write_io[i]);
+	}
 
 #if IS_ENABLED(CONFIG_UNICODE)
 	utf8_unload(sb->s_encoding);

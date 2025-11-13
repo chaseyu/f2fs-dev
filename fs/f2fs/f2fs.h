@@ -133,6 +133,7 @@ enum f2fs_mount_opt {
 	 */
 	F2FS_MOUNT_LAZYTIME,
 	F2FS_MOUNT_RESERVE_NODE,
+	F2FS_MOUNT_IO_THREAD,
 };
 
 #define F2FS_OPTION(sbi)	((sbi)->mount_opt)
@@ -1325,6 +1326,9 @@ struct f2fs_io_info {
 	struct writeback_control *io_wbc; /* writeback control */
 	struct bio **bio;		/* bio for ipu */
 	sector_t *last_block;		/* last block number in bio */
+	struct task_struct *task;	/* current task */
+	struct completion wait;		/* wait completion */
+	unsigned long long io_seqno;	/* IO sequence No */
 };
 
 struct bio_entry {
@@ -1348,7 +1352,14 @@ struct f2fs_bio_info {
 	struct list_head io_list;	/* track fios */
 	struct list_head bio_list;	/* bio entry list head */
 	struct f2fs_rwsem bio_list_lock;	/* lock to protect bio entry list */
+	struct task_struct *io_submit_thread;	/* io submission thread */
+	wait_queue_head_t io_wait_queue;	/* io wait queue */
+	enum page_type ptype;		/* data type */
+	unsigned long long io_seqno;	/* current IO seqno */
+	unsigned long long last_io_seqno;	/* last submitted IO seqno */
 };
+
+#define DEFAULT_IO_SUBMIT_IOPRIO (IOPRIO_PRIO_VALUE(IOPRIO_CLASS_RT, 3))
 
 #define FDEV(i)				(sbi->devs[i])
 #define RDEV(i)				(raw_super->devs[i])
@@ -4088,6 +4099,7 @@ int f2fs_encrypt_one_page(struct f2fs_io_info *fio);
 bool f2fs_should_update_inplace(struct inode *inode, struct f2fs_io_info *fio);
 bool f2fs_should_update_outplace(struct inode *inode, struct f2fs_io_info *fio);
 int f2fs_write_single_data_page(struct folio *folio, int *submitted,
+				unsigned long long *io_seqno,
 				struct bio **bio, sector_t *last_block,
 				struct writeback_control *wbc,
 				enum iostat_type io_type,

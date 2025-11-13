@@ -1506,6 +1506,7 @@ void f2fs_compress_write_end_io(struct bio *bio, struct folio *folio)
 
 static int f2fs_write_raw_pages(struct compress_ctx *cc,
 					int *submitted_p,
+					unsigned long long *io_seqno,
 					struct writeback_control *wbc,
 					enum iostat_type io_type)
 {
@@ -1559,7 +1560,7 @@ continue_unlock:
 			goto continue_unlock;
 
 		submitted = 0;
-		ret = f2fs_write_single_data_page(folio, &submitted,
+		ret = f2fs_write_single_data_page(folio, &submitted, &io_seqno,
 						NULL, NULL, wbc, io_type,
 						compr_blocks, false);
 		if (ret) {
@@ -1593,6 +1594,7 @@ out:
 
 int f2fs_write_multi_pages(struct compress_ctx *cc,
 					int *submitted,
+					unsigned long long *io_seqno,
 					struct writeback_control *wbc,
 					enum iostat_type io_type)
 {
@@ -1618,7 +1620,7 @@ int f2fs_write_multi_pages(struct compress_ctx *cc,
 write:
 	f2fs_bug_on(F2FS_I_SB(cc->inode), *submitted);
 
-	err = f2fs_write_raw_pages(cc, submitted, wbc, io_type);
+	err = f2fs_write_raw_pages(cc, submitted, io_seqno, wbc, io_type);
 	f2fs_put_rpages_wbc(cc, wbc, false, false);
 destroy_out:
 	f2fs_destroy_compress_ctx(cc, false);

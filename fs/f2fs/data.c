@@ -587,6 +587,22 @@ static bool __has_merged_page(struct bio *bio, struct inode *inode,
 	return false;
 }
 
+static void f2fs_io_submit(struct f2fs_bio_info *io, struct f2fs_io_info *fio);
+static int io_submit_thread(void *data)
+{
+	struct f2fs_bio_info *io = data;
+	wait_queue_head_t *q = &io->io_wait_queue;
+repeat:
+	if (kthread_should_stop())
+		return 0;
+
+	f2fs_io_submit(io, NULL);
+
+	wait_event_interruptible(*q,
+		kthread_should_stop() || !list_empty(&io->io_list));
+	goto repeat;
+}
+
 int f2fs_init_write_merge_io(struct f2fs_sb_info *sbi)
 {
 	int i;
@@ -603,6 +619,7 @@ int f2fs_init_write_merge_io(struct f2fs_sb_info *sbi)
 
 		for (j = HOT; j < n; j++) {
 			struct f2fs_bio_info *io = &sbi->write_io[i][j];
+			dev_t dev = sbi->sb->s_bdev->bd_dev;
 
 			init_f2fs_rwsem(&io->io_rwsem);
 			io->sbi = sbi;
@@ -612,11 +629,29 @@ int f2fs_init_write_merge_io(struct f2fs_sb_info *sbi)
 			INIT_LIST_HEAD(&io->io_list);
 			INIT_LIST_HEAD(&io->bio_list);
 			init_f2fs_rwsem(&io->bio_list_lock);
+			io->ptype = i;
+			io->io_seqno = 1;
+			io->last_io_seqno = 0;
 #ifdef CONFIG_BLK_DEV_ZONED
 			init_completion(&io->zone_wait);
 			io->zone_pending_bio = NULL;
 			io->bi_private = NULL;
+
 #endif
+			if (!test_opt(sbi, IO_THREAD))
+				continue;
+			init_waitqueue_head(&io->io_wait_queue);
+			io->io_submit_thread = kthread_run(io_submit_thread, io,
+					"f2fs_io[%u]-%u:%u", i * NR_PAGE_TYPE + j,
+					MAJOR(dev), MINOR(dev));
+			if (IS_ERR(io->io_submit_thread)) {
+				int err = PTR_ERR(io->io_submit_thread);
+
+				io->io_submit_thread = NULL;
+				return err;
+			}
+			set_task_ioprio(io->io_submit_thread,
+					DEFAULT_IO_SUBMIT_IOPRIO);
 		}
 	}
 
@@ -950,20 +985,18 @@ static bool is_end_zone_blkaddr(struct f2fs_sb_info *sbi, block_t blkaddr)
 }
 #endif
 
-void f2fs_submit_page_write(struct f2fs_io_info *fio)
+static void f2fs_io_submit(struct f2fs_bio_info *io, struct f2fs_io_info *fio)
 {
-	struct f2fs_sb_info *sbi = fio->sbi;
-	enum page_type btype = PAGE_TYPE_OF_BIO(fio->type);
-	struct f2fs_bio_info *io = sbi->write_io[btype] + fio->temp;
+	struct f2fs_sb_info *sbi = io->sbi;
 	struct folio *bio_folio;
+	enum page_type ptype = io->ptype;
 	enum count_type type;
-
-	f2fs_bug_on(sbi, is_read_io(fio->op));
+	bool async = !fio;
 
 	f2fs_down_write(&io->io_rwsem);
 next:
 #ifdef CONFIG_BLK_DEV_ZONED
-	if (f2fs_sb_has_blkzoned(sbi) && btype < META && io->zone_pending_bio) {
+	if (f2fs_sb_has_blkzoned(sbi) && ptype < META && io->zone_pending_bio) {
 		wait_for_completion_io(&io->zone_wait);
 		bio_put(io->zone_pending_bio);
 		io->zone_pending_bio = NULL;
@@ -971,7 +1004,7 @@ next:
 	}
 #endif
 
-	if (fio->in_list) {
+	if (async || fio->in_list) {
 		spin_lock(&io->io_lock);
 		if (list_empty(&io->io_list)) {
 			spin_unlock(&io->io_lock);
@@ -1025,7 +1058,7 @@ alloc_new:
 
 	trace_f2fs_submit_folio_write(fio->folio, fio);
 #ifdef CONFIG_BLK_DEV_ZONED
-	if (f2fs_sb_has_blkzoned(sbi) && btype < META &&
+	if (f2fs_sb_has_blkzoned(sbi) && ptype < META &&
 			is_end_zone_blkaddr(sbi, fio->new_blkaddr)) {
 		bio_get(io->bio);
 		reinit_completion(&io->zone_wait);
@@ -1036,13 +1069,41 @@ alloc_new:
 		__submit_merged_bio(io);
 	}
 #endif
-	if (fio->in_list)
+	if (fio->in_list) {
+		if (async) {
+			spin_lock(&io->io_lock);
+			io->last_io_seqno = fio->io_seqno;
+			spin_unlock(&io->io_lock);
+			complete(&fio->wait);
+		}
 		goto next;
+	}
 out:
 	if (is_sbi_flag_set(sbi, SBI_IS_SHUTDOWN) ||
 				!f2fs_is_checkpoint_ready(sbi))
 		__submit_merged_bio(io);
 	f2fs_up_write(&io->io_rwsem);
+}
+
+void f2fs_submit_page_write(struct f2fs_io_info *fio)
+{
+	struct f2fs_sb_info *sbi = fio->sbi;
+	enum page_type ptype = PAGE_TYPE_OF_BIO(fio->type);
+	struct f2fs_bio_info *io = sbi->write_io[ptype] + fio->temp;
+
+	f2fs_bug_on(sbi, is_read_io(fio->op));
+
+	if (test_opt(sbi, IO_THREAD) && fio->in_list) {
+		smp_mb();
+
+		if (waitqueue_active(&io->io_wait_queue))
+			wake_up(&io->io_wait_queue);
+
+		wait_for_completion(&fio->wait);
+		return;
+	}
+
+	f2fs_io_submit(io, fio);
 }
 
 static struct bio *f2fs_grab_read_bio(struct inode *inode, block_t blkaddr,
@@ -2764,6 +2825,7 @@ out:
 }
 
 int f2fs_write_single_data_page(struct folio *folio, int *submitted,
+				unsigned long long *io_seqno,
 				struct bio **bio,
 				sector_t *last_block,
 				struct writeback_control *wbc,
@@ -2906,6 +2968,8 @@ out:
 
 	if (submitted)
 		*submitted = fio.submitted;
+	if (io_seqno)
+		*io_seqno = fio.io_seqno;
 
 	return 0;
 
@@ -2967,6 +3031,7 @@ static int f2fs_write_cache_pages(struct address_space *mapping,
 	xa_mark_t tag;
 	int nwritten = 0;
 	int submitted = 0;
+	unsigned long long io_seqno = 0;
 	int i;
 
 #ifdef CONFIG_F2FS_FS_COMPRESSION
@@ -3055,7 +3120,8 @@ readd:
 				if (!f2fs_cluster_can_merge_page(&cc,
 								folio->index)) {
 					ret = f2fs_write_multi_pages(&cc,
-						&submitted, wbc, io_type);
+						&submitted, &io_seqno,
+						wbc, io_type);
 					if (!ret)
 						need_readd = true;
 					goto result;
@@ -3130,8 +3196,8 @@ continue_unlock:
 			}
 #endif
 			submitted = 0;
-			ret = f2fs_write_single_data_page(folio,
-					&submitted, &bio, &last_block,
+			ret = f2fs_write_single_data_page(folio, &submitted,
+					&io_seqno, &bio, &last_block,
 					wbc, io_type, 0, true);
 #ifdef CONFIG_F2FS_FS_COMPRESSION
 result:
@@ -3176,7 +3242,8 @@ next:
 #ifdef CONFIG_F2FS_FS_COMPRESSION
 	/* flush remained pages in compress cluster */
 	if (f2fs_compressed_file(inode) && !f2fs_cluster_is_empty(&cc)) {
-		ret = f2fs_write_multi_pages(&cc, &submitted, wbc, io_type);
+		ret = f2fs_write_multi_pages(&cc, &submitted, &io_seqno,
+							wbc, io_type);
 		nwritten += submitted;
 		wbc->nr_to_write -= submitted;
 		if (ret) {
@@ -3197,9 +3264,13 @@ next:
 	if (wbc->range_cyclic || (range_whole && wbc->nr_to_write > 0))
 		mapping->writeback_index = done_index;
 
-	if (nwritten)
-		f2fs_submit_merged_write_cond(F2FS_M_SB(mapping), mapping->host,
+	if (nwritten) {
+		if (test_opt(sbi, IO_THREAD))
+			f2fs_submit_io_cache();
+		else
+			f2fs_submit_merged_write_cond(sbi, mapping->host,
 								NULL, 0, DATA);
+	}
 	/* submit cached bio of IPU write */
 	if (bio)
 		f2fs_submit_merged_ipu_write(sbi, &bio, NULL);
