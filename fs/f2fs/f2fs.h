@@ -1951,6 +1951,13 @@ struct f2fs_sb_info {
 	spinlock_t iostat_lat_lock;
 	struct iostat_lat_info *iostat_io_lat;
 #endif
+	unsigned long long wait_sum[3];
+	unsigned long long wait_peak[3];
+	unsigned long long wait_cnt[3];
+
+	unsigned long long submit_sum[3];
+	unsigned long long submit_peak[3];
+	unsigned long long submit_cnt[3];
 };
 
 /* Definitions to access f2fs_sb_info */

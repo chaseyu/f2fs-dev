@@ -12,6 +12,7 @@ enum iostat_lat_type {
 	READ_IO = 0,
 	WRITE_SYNC_IO,
 	WRITE_ASYNC_IO,
+	WAIT_COMPLETION,
 	MAX_IO_TYPE,
 };
 
