@@ -957,9 +957,7 @@ void f2fs_submit_page_write(struct f2fs_io_info *fio)
 	struct f2fs_bio_info *io = sbi->write_io[btype] + fio->temp;
 	struct folio *bio_folio;
 	enum count_type type;
-	unsigned long long sum = 0;
-	unsigned long long cnt = 0;
-	unsigned long long peak = 0;
+	unsigned long long time;
 
 	f2fs_bug_on(sbi, is_read_io(fio->op));
 
@@ -967,18 +965,15 @@ void f2fs_submit_page_write(struct f2fs_io_info *fio)
 next:
 #ifdef CONFIG_BLK_DEV_ZONED
 	if (f2fs_sb_has_blkzoned(sbi) && btype < META && io->zone_pending_bio) {
-		unsigned long long time = ktime_get();
-
+		time = ktime_get();
 		wait_for_completion_io(&io->zone_wait);
 		time = ktime_get() - time;
-		sbi->wait_sum[btype] += time;
-		sbi->wait_cnt[btype]++;
-		if (time > sbi->wait_peak[btype])
-			sbi->wait_peak[btype] = time;
-		printk("f2fs_submit_page_write: [wait] type:%d, avg:%llu, cnt:%llu, peak:%llu\n",
-				btype,
-				sbi->wait_sum[btype] / sbi->wait_cnt[btype],
-				sbi->wait_cnt[btype], sbi->wait_peak[btype]);
+
+		spin_lock(&sbi->cumu_lock);
+		if (btype == DATA && sbi->data_num[CUMU_WAIT] < CUMU_MAX_DATA)
+			sbi->data[CUMU_WAIT][sbi->data_num[CUMU_WAIT]++] =
+							time;
+		spin_unlock(&sbi->cumu_lock);
 
 		bio_put(io->zone_pending_bio);
 		io->zone_pending_bio = NULL;
@@ -1018,18 +1013,16 @@ next:
 			      fio->new_blkaddr) ||
 	     !f2fs_crypt_mergeable_bio(io->bio, fio_inode(fio),
 				bio_folio->index, fio))) {
-		unsigned long long time = ktime_get();
-
+		time = ktime_get();
 		__submit_merged_bio(io);
 		time = ktime_get() - time;
-		sbi->submit_sum[btype] += time;
-		sbi->submit_cnt[btype]++;
-		if (time > sbi->submit_peak[btype])
-			sbi->submit_peak[btype] = time;
-		sum += time;
-		cnt++;
-		if (time > peak)
-			peak = time;
+
+		spin_lock(&sbi->cumu_lock);
+		if (btype == DATA && sbi->data_num[CUMU_SUBMIT] < CUMU_MAX_DATA)
+			sbi->data[CUMU_SUBMIT][sbi->data_num[CUMU_SUBMIT]++] =
+							time;
+		spin_unlock(&sbi->cumu_lock);
+
 	}
 alloc_new:
 	if (io->bio == NULL) {
@@ -1040,18 +1033,15 @@ alloc_new:
 	}
 
 	if (!bio_add_folio(io->bio, bio_folio, folio_size(bio_folio), 0)) {
-		unsigned long long time = ktime_get();
-
+		time = ktime_get();
 		__submit_merged_bio(io);
 		time = ktime_get() - time;
-		sbi->submit_sum[btype] += time;
-		sbi->submit_cnt[btype]++;
-		if (time > sbi->submit_peak[btype])
-			sbi->submit_peak[btype] = time;
-		sum += time;
-		cnt++;
-		if (time > peak)
-			peak = time;
+
+		spin_lock(&sbi->cumu_lock);
+		if (btype == DATA && sbi->data_num[CUMU_SUBMIT] < CUMU_MAX_DATA)
+			sbi->data[CUMU_SUBMIT][sbi->data_num[CUMU_SUBMIT]++] =
+							time;
+		spin_unlock(&sbi->cumu_lock);
 
 		goto alloc_new;
 	}
@@ -1066,37 +1056,27 @@ alloc_new:
 #ifdef CONFIG_BLK_DEV_ZONED
 	if (f2fs_sb_has_blkzoned(sbi) && btype < META &&
 			is_end_zone_blkaddr(sbi, fio->new_blkaddr)) {
-		unsigned long long time;
-
 		bio_get(io->bio);
 		reinit_completion(&io->zone_wait);
 		io->bi_private = io->bio->bi_private;
 		io->bio->bi_private = io;
 		io->bio->bi_end_io = f2fs_zone_write_end_io;
 		io->zone_pending_bio = io->bio;
-
 		time = ktime_get();
 		__submit_merged_bio(io);
 		time = ktime_get() - time;
-		sbi->submit_sum[btype] += time;
-		sbi->submit_cnt[btype]++;
-		if (time > sbi->submit_peak[btype])
-			sbi->submit_peak[btype] = time;
-		sum += time;
-		cnt++;
-		if (time > peak)
-			peak = time;
+
+		spin_lock(&sbi->cumu_lock);
+		if (btype == DATA && sbi->data_num[CUMU_SUBMIT] < CUMU_MAX_DATA)
+			sbi->data[CUMU_SUBMIT][sbi->data_num[CUMU_SUBMIT]++] =
+							time;
+		spin_unlock(&sbi->cumu_lock);
+
 	}
 #endif
 	if (fio->in_list)
 		goto next;
 out:
-	if (cnt)
-		printk("f2fs_submit_page_write: [submit] type:%d, current [%llu, %llu, %llu], avg:%llu, cnt:%llu, peak:%llu\n",
-				btype,
-				sum / cnt, cnt, peak,
-				sbi->submit_sum[btype] / sbi->submit_cnt[btype],
-				sbi->submit_cnt[btype], sbi->submit_peak[btype]);
 	if (is_sbi_flag_set(sbi, SBI_IS_SHUTDOWN) ||
 				!f2fs_is_checkpoint_ready(sbi))
 		__submit_merged_bio(io);

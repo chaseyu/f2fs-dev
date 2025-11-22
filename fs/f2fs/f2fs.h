@@ -1668,6 +1668,15 @@ struct decompress_io_ctx {
 #define MAX_COMPRESS_LOG_SIZE		8
 #define MAX_COMPRESS_WINDOW_SIZE(log_size)	((PAGE_SIZE) << (log_size))
 
+enum {
+	CUMU_WAIT,
+	CUMU_SUBMIT,
+	CUMU_MAX,
+};
+
+#define CUMU_MAX_DATA		(128*1024)
+#define MAX_LEVEL		17
+
 struct f2fs_sb_info {
 	struct super_block *sb;			/* pointer to VFS super block */
 	struct proc_dir_entry *s_proc;		/* proc entry */
@@ -1951,13 +1960,11 @@ struct f2fs_sb_info {
 	spinlock_t iostat_lat_lock;
 	struct iostat_lat_info *iostat_io_lat;
 #endif
-	unsigned long long wait_sum[3];
-	unsigned long long wait_peak[3];
-	unsigned long long wait_cnt[3];
-
-	unsigned long long submit_sum[3];
-	unsigned long long submit_peak[3];
-	unsigned long long submit_cnt[3];
+	unsigned long long tmp[CUMU_MAX_DATA];
+	unsigned long long data[CUMU_MAX][CUMU_MAX_DATA];
+	unsigned long long data_num[CUMU_MAX];
+	spinlock_t cumu_lock;
+	unsigned long long cumu;	/* cumulative distribution */
 };
 
 /* Definitions to access f2fs_sb_info */

@@ -344,6 +344,41 @@ static ssize_t main_blkaddr_show(struct f2fs_attr *a,
 			(unsigned long long)MAIN_BLKADDR(sbi));
 }
 
+static unsigned long long percentile(unsigned long long *data, int num,
+                               unsigned long long perc)
+{
+	unsigned long long result = 0;
+
+	if (num == 0) return 0;
+
+	unsigned long long pos = perc * (num - 1) / 10000;
+	unsigned long long left = perc * (num - 1) % 10000;
+
+
+	if (pos == num - 1)
+		result = data[pos];
+	else
+		result = data[pos] + left * (data[pos + 1] - data[pos]) / 10000;
+	return result;
+}
+
+void bubble_sort(unsigned long long *arr, int size)
+{
+	int i, j;
+
+	for (i = 0; i < size - 1; i++) {
+		for (j = 0; j < size - 1 - i; j++) {
+			unsigned long long tmp;
+
+			if (arr[j] <= arr[j + 1])
+				continue;
+			tmp = arr[j];
+			arr[j] = arr[j + 1];
+			arr[j + 1] = tmp;
+		}
+	}
+}
+
 static ssize_t f2fs_sbi_show(struct f2fs_attr *a,
 			struct f2fs_sb_info *sbi, char *buf)
 {
@@ -368,6 +403,58 @@ static ssize_t f2fs_sbi_show(struct f2fs_attr *a,
 		len += sysfs_emit_at(buf, len, "hot file extension:\n");
 		for (i = cold_count; i < cold_count + hot_count; i++)
 			len += sysfs_emit_at(buf, len, "%s\n", extlist[i]);
+
+		return len;
+	}
+
+	if (!strcmp(a->attr.name, "cumu")) {
+		unsigned long long percentiles[MAX_LEVEL] = {
+			100,	// 1%
+			500,	// 5%
+			1000,	 // 10%
+			2000,	 // 20%
+			3000,	 // 30%
+			4000,	 // 40%
+			5000,	 // 50%
+			6000,	 // 60%
+			7000,	 // 70%
+			8000,	 // 80%
+			9000,	 // 90%
+			9500,	 // 95%
+			9900,	 // 99%
+			9950,	// 99.5%
+			9990,	// 99.9%
+			9995,  // 99.95%
+			9999   // 99.99%
+		};
+		const char *labels[MAX_LEVEL] = {
+			"1%", "5%", "10%", "20%", "30%", "40%", "50%", "60%", "70%", "80%",
+			"90%", "95%", "99%", "99.5%", "99.9%", "99.95%", "99.99%"
+		};
+		unsigned long long result[MAX_LEVEL];
+		int i, j;
+		int len = 0;
+		int size = 0;
+
+		for (i = 0; i < CUMU_MAX; i++) {
+			if (sbi->data_num[i] == 0)
+				continue;
+			spin_lock(&sbi->cumu_lock);
+			size = sbi->data_num[i];
+			memcpy(sbi->tmp, sbi->data[i], sizeof(unsigned long long) * size);
+			spin_unlock(&sbi->cumu_lock);
+
+			bubble_sort(sbi->tmp, size);
+
+			for (j = 0; j < MAX_LEVEL; j++)
+				result[j] = percentile(sbi->tmp, size,
+							percentiles[j]);
+			len += sysfs_emit_at(buf, len, "%s, samples:%d\n",
+					i == 0 ? "wait" : "submit", size);
+			for (j = 0; j < MAX_LEVEL; j++)
+				len += sysfs_emit_at(buf, len, "%-8s: %llu\n",
+						labels[j], result[j]);
+		}
 
 		return len;
 	}
@@ -906,6 +993,21 @@ out:
 		return count;
 	}
 
+	if (!strcmp(a->attr.name, "cumu")) {
+		if (t == 0) {
+			int i;
+
+			for (i = 0; i < CUMU_MAX; i++) {
+				spin_lock(&sbi->cumu_lock);
+				memset(sbi->data[i], 0,
+					sizeof(unsigned long long) * CUMU_MAX_DATA);
+				sbi->data_num[i] = 0;
+				spin_unlock(&sbi->cumu_lock);
+			}
+		}
+		return count;
+	}
+
 	*ui = (unsigned int)t;
 
 	return count;
@@ -1180,6 +1282,7 @@ F2FS_SBI_GENERAL_RW_ATTR(migration_window_granularity);
 F2FS_SBI_GENERAL_RW_ATTR(dir_level);
 F2FS_SBI_GENERAL_RW_ATTR(allocate_section_hint);
 F2FS_SBI_GENERAL_RW_ATTR(allocate_section_policy);
+F2FS_SBI_GENERAL_RW_ATTR(cumu);
 #ifdef CONFIG_F2FS_IOSTAT
 F2FS_SBI_GENERAL_RW_ATTR(iostat_enable);
 F2FS_SBI_GENERAL_RW_ATTR(iostat_period_ms);
@@ -1422,6 +1525,7 @@ static struct attribute *f2fs_attrs[] = {
 	ATTR_LIST(reserved_pin_section),
 	ATTR_LIST(allocate_section_hint),
 	ATTR_LIST(allocate_section_policy),
+	ATTR_LIST(cumu),
 	NULL,
 };
 ATTRIBUTE_GROUPS(f2fs);

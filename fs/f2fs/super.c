@@ -4331,6 +4331,8 @@ static void init_sb_info(struct f2fs_sb_info *sbi)
 
 	init_f2fs_rwsem(&sbi->sb_lock);
 	init_f2fs_rwsem(&sbi->pin_sem);
+
+	spin_lock_init(&sbi->cumu_lock);
 }
 
 static int init_percpu_info(struct f2fs_sb_info *sbi)
