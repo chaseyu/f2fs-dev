@@ -24,6 +24,7 @@
 #include <linux/quotaops.h>
 #include <linux/part_stat.h>
 #include <linux/rw_hint.h>
+#include <linux/sched/task.h>
 
 #include <linux/fscrypt.h>
 #include <linux/fsverity.h>
@@ -179,6 +180,9 @@ struct f2fs_rwsem {
         struct rw_semaphore internal_rwsem;
 #ifdef CONFIG_F2FS_UNFAIR_RWSEM
         wait_queue_head_t read_waiters;
+	struct task_struct *task;
+	wait_queue_head_t write_waiters;
+	spinlock_t lock;
 #endif
 };
 
@@ -2273,6 +2277,9 @@ static inline void __init_f2fs_rwsem(struct f2fs_rwsem *sem,
 	__init_rwsem(&sem->internal_rwsem, sem_name, key);
 #ifdef CONFIG_F2FS_UNFAIR_RWSEM
 	init_waitqueue_head(&sem->read_waiters);
+	init_waitqueue_head(&sem->write_waiters);
+	sem->task = NULL;
+	spin_lock_init(&sem->lock);
 #endif
 }
 
@@ -2303,6 +2310,58 @@ static inline int f2fs_down_read_trylock(struct f2fs_rwsem *sem)
 static inline void f2fs_up_read(struct f2fs_rwsem *sem)
 {
 	up_read(&sem->internal_rwsem);
+}
+
+static inline void f2fs_down_write_unfair(struct f2fs_rwsem *sem)
+{
+#ifdef CONFIG_F2FS_UNFAIR_RWSEM
+	DEFINE_WAIT(wait);
+
+	spin_lock(&sem->lock);
+
+	for (;;) {
+		struct task_struct *task = NULL;
+
+		if (down_write_trylock(&sem->internal_rwsem)) {
+			finish_wait(&sem->read_waiters, &wait);
+			break;
+		}
+
+		if (sem->task) {
+			get_task_struct(sem->task);
+			task = sem->task;
+		}
+		prepare_to_wait(&sem->write_waiters, &wait, TASK_UNINTERRUPTIBLE);
+		spin_unlock(&sem->lock);
+
+		if (task) {
+			wake_up_process(task);
+			put_task_struct(task);
+		}
+		schedule_timeout(DEFAULT_SCHEDULE_TIMEOUT);
+
+		spin_lock(&sem->lock);
+		finish_wait(&sem->read_waiters, &wait);
+	}
+
+	sem->task = current;
+	spin_unlock(&sem->lock);
+#else
+	down_write(&sem->internal_rwsem);
+#endif
+}
+
+static inline void f2fs_up_write_unfair(struct f2fs_rwsem *sem)
+{
+#ifdef CONFIG_F2FS_UNFAIR_RWSEM
+	spin_lock(&sem->lock);
+	sem->task = NULL;
+	spin_unlock(&sem->lock);
+#endif
+	up_write(&sem->internal_rwsem);
+#ifdef CONFIG_F2FS_UNFAIR_RWSEM
+	wake_up_all(&sem->read_waiters);
+#endif
 }
 
 static inline void f2fs_down_write(struct f2fs_rwsem *sem)

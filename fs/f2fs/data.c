@@ -985,7 +985,7 @@ void f2fs_submit_page_write(struct f2fs_io_info *fio)
 
 	f2fs_bug_on(sbi, is_read_io(fio->op));
 
-	f2fs_down_write(&io->io_rwsem);
+	f2fs_down_write_unfair(&io->io_rwsem);
 next:
 #ifdef CONFIG_BLK_DEV_ZONED
 	if (f2fs_sb_has_blkzoned(sbi) && btype < META && io->zone_pending_bio) {
@@ -1067,7 +1067,7 @@ out:
 	if (is_sbi_flag_set(sbi, SBI_IS_SHUTDOWN) ||
 				!f2fs_is_checkpoint_ready(sbi))
 		__submit_merged_bio(io);
-	f2fs_up_write(&io->io_rwsem);
+	f2fs_up_write_unfair(&io->io_rwsem);
 }
 
 static struct bio *f2fs_grab_read_bio(struct inode *inode, block_t blkaddr,
