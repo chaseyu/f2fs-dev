@@ -4142,6 +4142,8 @@ int f2fs_reserve_new_blocks(struct dnode_of_data *dn, blkcnt_t count);
 int f2fs_reserve_new_block(struct dnode_of_data *dn);
 int f2fs_get_block_locked(struct dnode_of_data *dn, pgoff_t index);
 int f2fs_reserve_block(struct dnode_of_data *dn, pgoff_t index);
+struct folio *f2fs_grab_non_large_folio(struct address_space *mapping,
+				pgoff_t index, bool for_write);
 struct folio *f2fs_get_read_data_folio(struct inode *inode, pgoff_t index,
 		blk_opf_t op_flags, bool for_write, pgoff_t *next_pgofs);
 struct folio *f2fs_find_data_folio(struct inode *inode, pgoff_t index,

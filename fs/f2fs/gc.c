@@ -1329,7 +1329,7 @@ static int move_data_block(struct inode *inode, block_t bidx,
 				CURSEG_ALL_DATA_ATGC : CURSEG_COLD_DATA;
 
 	/* do not read out */
-	folio = f2fs_grab_cache_folio(mapping, bidx, false);
+	folio = f2fs_grab_non_large_folio(mapping, bidx, false);
 	if (IS_ERR(folio))
 		return PTR_ERR(folio);
 
