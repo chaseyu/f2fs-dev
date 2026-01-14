@@ -184,6 +184,14 @@ TRACE_DEFINE_ENUM(CP_PHASE_FINISH_CHECKPOINT);
 		{ CP_PHASE_FINISH_BLOCK_OPS,	"finish block_ops" },			\
 		{ CP_PHASE_FINISH_CHECKPOINT,	"finish checkpoint" })
 
+#define show_enable_cp_phase(phase)					\
+	__print_symbolic(phase, 					\
+		{ ENABLE_CP_START,	"start" },			\
+		{ ENABLE_CP_GRAB_LOCK,	"grab lock" },			\
+		{ ENABLE_CP_SYNC_INODE,	"sync_inode_sb" },		\
+		{ ENABLE_CP_SYNC_FS,	"sync_fs" },			\
+		{ ENABLE_CP_END,	"end" })
+
 #define show_lock_name(lock)						\
 	__print_symbolic(lock,						\
 		{ LOCK_NAME_CP_RWSEM,		"cp_rwsem" },		\
@@ -2523,6 +2531,46 @@ TRACE_EVENT(f2fs_lock_elapsed_time,
 		__entry->runnable_time,
 		__entry->io_sleep_time,
 		__entry->other_time)
+);
+
+TRACE_EVENT(f2fs_enable_checkpoint,
+
+	TP_PROTO(struct f2fs_sb_info *sbi, u16 phase),
+
+	TP_ARGS(sbi, phase),
+
+	TP_STRUCT__entry(
+		__field(dev_t, dev)
+		__field(u16, phase)
+		__field(long long, meta)
+		__field(long long, imeta)
+		__field(long long, nodes)
+		__field(long long, data)
+		__field(long long, dents)
+		__field(long long, qdata)
+	),
+
+	TP_fast_assign(
+		__entry->dev	= sbi->sb->s_dev;
+		__entry->phase	= phase;
+		__entry->meta	= get_pages(sbi, F2FS_DIRTY_META);
+		__entry->imeta	= get_pages(sbi, F2FS_DIRTY_IMETA);
+		__entry->nodes	= get_pages(sbi, F2FS_DIRTY_NODES);
+		__entry->data	= get_pages(sbi, F2FS_DIRTY_DATA);
+		__entry->dents	= get_pages(sbi, F2FS_DIRTY_DENTS);
+		__entry->qdata	= get_pages(sbi, F2FS_DIRTY_QDATA);
+	),
+
+	TP_printk("dev = (%d,%d), phase: %s, meta: %lld, imeta: %lld, "
+		"nodes: %lld, data: %lld, dents: %lld, qdata: %lld",
+		show_dev(__entry->dev),
+		show_enable_cp_phase(__entry->phase),
+		__entry->meta,
+		__entry->imeta,
+		__entry->nodes,
+		__entry->data,
+		__entry->dents,
+		__entry->qdata)
 );
 
 #endif /* _TRACE_F2FS_H */

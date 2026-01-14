@@ -349,6 +349,14 @@ enum f2fs_cp_phase {
 	CP_PHASE_FINISH_CHECKPOINT,
 };
 
+enum f2fs_enable_cp_phase {
+	ENABLE_CP_START,
+	ENABLE_CP_GRAB_LOCK,
+	ENABLE_CP_SYNC_INODE,
+	ENABLE_CP_SYNC_FS,
+	ENABLE_CP_END,
+};
+
 /*
  * indicate meta/data type
  */

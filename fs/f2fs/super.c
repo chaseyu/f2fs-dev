@@ -2696,6 +2696,8 @@ static int f2fs_enable_checkpoint(struct f2fs_sb_info *sbi)
 					get_pages(sbi, F2FS_DIRTY_NODES),
 					get_pages(sbi, F2FS_DIRTY_DATA));
 
+	trace_f2fs_enable_checkpoint(sbi, ENABLE_CP_START);
+
 	f2fs_update_time(sbi, ENABLE_TIME);
 
 	start = ktime_get();
@@ -2710,7 +2712,10 @@ static int f2fs_enable_checkpoint(struct f2fs_sb_info *sbi)
 	}
 	writeback = ktime_get();
 
-	sync_inodes_sb(sbi->sb);
+	trace_f2fs_enable_checkpoint(sbi, ENABLE_CP_SYNC_INODE);
+
+	if (get_pages(sbi, F2FS_DIRTY_DATA))
+		sync_inodes_sb(sbi->sb);
 
 	if (unlikely(get_pages(sbi, F2FS_DIRTY_DATA)))
 		f2fs_warn(sbi, "checkpoint=enable has some unwritten data: %lld",
@@ -2723,12 +2728,16 @@ static int f2fs_enable_checkpoint(struct f2fs_sb_info *sbi)
 	set_sbi_flag(sbi, SBI_IS_DIRTY);
 	f2fs_up_write_trace(&sbi->gc_lock, &lc);
 
+	trace_f2fs_enable_checkpoint(sbi, ENABLE_CP_SYNC_FS);
+
 	ret = f2fs_sync_fs(sbi->sb, 1);
 	if (ret)
 		f2fs_err(sbi, "%s sync_fs failed, ret: %d", __func__, ret);
 
 	/* Let's ensure there's no pending checkpoint anymore */
 	f2fs_flush_ckpt_thread(sbi);
+
+	trace_f2fs_enable_checkpoint(sbi, ENABLE_CP_END);
 
 	end = ktime_get();
 
