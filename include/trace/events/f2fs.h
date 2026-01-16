@@ -2573,6 +2573,35 @@ TRACE_EVENT(f2fs_enable_checkpoint,
 		__entry->qdata)
 );
 
+TRACE_EVENT(f2fs_map_lock,
+
+	TP_PROTO(struct inode *inode, pgoff_t index, int flag, char *string),
+
+	TP_ARGS(inode, index, flag, string),
+
+	TP_STRUCT__entry(
+		__field(dev_t, dev)
+		__field(ino_t, ino)
+		__field(pgoff_t, index)
+		__field(int, flag)
+		__field(char *, string)
+	),
+
+	TP_fast_assign(
+		__entry->dev		= inode->i_sb->s_dev;
+		__entry->ino		= inode->i_ino;
+		__entry->index		= index;
+		__entry->flag		= flag;
+		__entry->string		= string;
+	),
+
+	TP_printk("dev = (%d,%d), ino = %lu, index = %lld, flag = %d, %s",
+		show_dev_ino(__entry),
+		__entry->index,
+		__entry->flag,
+		__entry->string)
+);
+
 #endif /* _TRACE_F2FS_H */
 
  /* This part must be outside protection */
