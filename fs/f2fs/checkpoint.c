@@ -1498,6 +1498,7 @@ retry_flush_nodes:
 	 * sbi->node_change is used only for AIO write_begin path which produces
 	 * dirty node blocks and some checkpoint values by block allocation.
 	 */
+
 	__prepare_cp_block(sbi);
 	f2fs_up_write(&sbi->node_change);
 	return err;
