@@ -19,10 +19,10 @@
 #include "node.h"
 #include <trace/events/f2fs.h>
 
-bool sanity_check_extent_cache(struct inode *inode, struct folio *ifolio)
+bool sanity_check_extent_cache(struct inode *inode, struct f2fs_cached_block *ientry)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
-	struct f2fs_extent *i_ext = &F2FS_INODE(ifolio)->i_ext;
+	struct f2fs_extent *i_ext = &F2FS_INODE(ientry)->i_ext;
 	struct extent_info ei;
 	int devi;
 
@@ -407,11 +407,11 @@ static void __drop_largest_extent(struct extent_tree *et,
 	}
 }
 
-void f2fs_init_read_extent_tree(struct inode *inode, struct folio *ifolio)
+void f2fs_init_read_extent_tree(struct inode *inode, struct f2fs_cached_block *ientry)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	struct extent_tree_info *eti = &sbi->extent_tree[EX_READ];
-	struct f2fs_extent *i_ext = &F2FS_INODE(ifolio)->i_ext;
+	struct f2fs_extent *i_ext = &F2FS_INODE(ientry)->i_ext;
 	struct extent_tree *et;
 	struct extent_node *en;
 	struct extent_info ei = {0};
@@ -419,9 +419,9 @@ void f2fs_init_read_extent_tree(struct inode *inode, struct folio *ifolio)
 	if (!__may_extent_tree(inode, EX_READ)) {
 		/* drop largest read extent */
 		if (i_ext->len) {
-			f2fs_folio_wait_writeback(ifolio, NODE, true, true);
+			f2fs_cache_wait_writeback(ientry);
 			i_ext->len = 0;
-			folio_mark_dirty(ifolio);
+			f2fs_mark_cache_dirty(ientry);
 		}
 		set_inode_flag(inode, FI_NO_EXTENT);
 		return;
@@ -947,7 +947,7 @@ static void __update_extent_cache(struct dnode_of_data *dn, enum extent_type typ
 	if (!__may_extent_tree(dn->inode, type))
 		return;
 
-	ei.fofs = f2fs_start_bidx_of_node(ofs_of_node(dn->node_folio), dn->inode) +
+	ei.fofs = f2fs_start_bidx_of_node(ofs_of_node(dn->node_entry), dn->inode) +
 								dn->ofs_in_node;
 	ei.len = 1;
 
