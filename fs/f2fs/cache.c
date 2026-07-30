@@ -413,7 +413,7 @@ static void f2fs_do_truncate_cache(struct f2fs_cached_block *entry,
 	spin_unlock(&cache->list_lock);
 }
 
-static void f2fs_truncate_cache(struct f2fs_cached_block *entry,
+void f2fs_truncate_cache(struct f2fs_cached_block *entry,
 					bool drop_dirty)
 {
 	f2fs_lock_cache(entry);
