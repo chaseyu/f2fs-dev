@@ -168,22 +168,34 @@ static bool f2fs_cache_put(struct f2fs_cached_block *entry)
 	return false;
 }
 
+static struct folio *f2fs_cache_folio_alloc(struct f2fs_sb_info *sbi,
+						unsigned int flags)
+{
+	if (!(flags & __GFP_NOFAIL) &&
+			time_to_inject(sbi, FAULT_PAGE_ALLOC))
+		return NULL;
+	return folio_alloc(flags, 0);
+}
+
 static struct f2fs_cached_block *f2fs_create_cache(
 		struct f2fs_cached_block_list *cache,
 		unsigned long index, bool nofail)
 {
+	struct f2fs_sb_info *sbi = cache->sbi;
 	struct f2fs_cached_block *entry;
 	struct folio *folio;
 	unsigned int flags = GFP_NOFS;
 
-	if (nofail)
+	if (nofail) {
 		flags |= __GFP_NOFAIL;
+		entry = kzalloc(sizeof(*entry), flags);
+	} else {
+		entry = f2fs_kzalloc(sbi, sizeof(*entry), flags);
+		if (!entry)
+			return ERR_PTR(-ENOMEM);
+	}
 
-	entry = kzalloc(sizeof(*entry), flags);
-	if (!entry)
-		return ERR_PTR(-ENOMEM);
-
-	folio = folio_alloc(flags, 0);
+	folio = f2fs_cache_folio_alloc(sbi, flags);
 	if (!folio) {
 		kfree(entry);
 		return ERR_PTR(-ENOMEM);
