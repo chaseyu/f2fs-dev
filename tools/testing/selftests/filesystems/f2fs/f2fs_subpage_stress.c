@@ -4,11 +4,13 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <linux/falloc.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/statfs.h>
 #include <unistd.h>
@@ -28,6 +30,7 @@ struct model_file {
 static uint64_t rng_state = UINT64_C(0x8a5cd789635d2dff);
 static unsigned int current_iteration;
 static unsigned int current_operation;
+static size_t system_page_size;
 
 static void fail(const char *what)
 {
@@ -148,6 +151,40 @@ static void write_random(struct model_file *file, unsigned int iteration, uint8_
 	verify_range(file, offset, len);
 }
 
+static void mmap_write_random(struct model_file *file, unsigned int iteration,
+			      uint8_t *write_buf)
+{
+	size_t offset, len, map_offset, map_delta, map_len, i;
+	uint8_t *map;
+
+	if (!file->size) {
+		write_random(file, iteration, write_buf);
+		return;
+	}
+	offset = next_random() % file->size;
+	len = 1 + next_random() % 32768;
+	if (len > file->size - offset)
+		len = file->size - offset;
+	map_offset = offset & ~(system_page_size - 1);
+	map_delta = offset - map_offset;
+	map_len = map_delta + len;
+	for (i = 0; i < len; i++)
+		write_buf[i] = (uint8_t)(iteration * 37U + i * 149U +
+					 offset + (i >> 3));
+
+	map = mmap(NULL, map_len, PROT_READ | PROT_WRITE, MAP_SHARED,
+		   file->fd, map_offset);
+	if (map == MAP_FAILED)
+		fail("random shared mmap");
+	memcpy(map + map_delta, write_buf, len);
+	memcpy(file->data + offset, write_buf, len);
+	if (!(next_random() & 1) && msync(map, map_len, MS_SYNC))
+		fail("random msync");
+	if (munmap(map, map_len))
+		fail("random munmap");
+	verify_range(file, offset, len);
+}
+
 static void truncate_random(struct model_file *file)
 {
 	size_t new_size = next_random() % (MAX_SIZE + 1U);
@@ -163,6 +200,70 @@ static void truncate_random(struct model_file *file)
 	if (ftruncate(file->fd, new_size))
 		fail("random ftruncate");
 	file->size = new_size;
+}
+
+static void fallocate_random(struct model_file *file, unsigned int op)
+{
+	size_t offset = next_random() % MAX_SIZE;
+	size_t len = 1 + next_random() % 65536;
+	size_t end;
+	int mode = 0;
+
+	if (len > MAX_SIZE - offset)
+		len = MAX_SIZE - offset;
+	end = offset + len;
+
+	switch (op) {
+	case 0:
+		mode = 0;
+		break;
+	case 1:
+		mode = FALLOC_FL_KEEP_SIZE;
+		break;
+	case 2:
+		mode = FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE;
+		break;
+	case 3:
+		mode = FALLOC_FL_ZERO_RANGE;
+		break;
+	case 4:
+		mode = FALLOC_FL_ZERO_RANGE | FALLOC_FL_KEEP_SIZE;
+		break;
+	default:
+		expect(false, "invalid fallocate model operation");
+	}
+
+	if (current_iteration < 32)
+		fprintf(stderr,
+			"iteration %u fallocate %s mode=0x%x offset=%zu len=%zu\n",
+			current_iteration, file->path, mode, offset, len);
+	if (fallocate(file->fd, mode, offset, len))
+		fail("random fallocate");
+
+	if (mode & FALLOC_FL_PUNCH_HOLE) {
+		if (offset < file->size) {
+			size_t zero_len = len;
+
+			if (zero_len > file->size - offset)
+				zero_len = file->size - offset;
+			memset(file->data + offset, 0, zero_len);
+		}
+	} else if (mode & FALLOC_FL_ZERO_RANGE) {
+		size_t zero_end = end;
+
+		if (mode & FALLOC_FL_KEEP_SIZE) {
+			if (zero_end > file->size)
+				zero_end = file->size;
+		} else if (end > file->size) {
+			file->size = end;
+		}
+		if (offset < zero_end)
+			memset(file->data + offset, 0, zero_end - offset);
+	} else if (!(mode & FALLOC_FL_KEEP_SIZE) && end > file->size) {
+		memset(file->data + file->size, 0, end - file->size);
+		file->size = end;
+	}
+	verify_file(file);
 }
 
 static void recreate_file(struct model_file *file, int dirfd)
@@ -219,6 +320,7 @@ int main(int argc, char **argv)
 	expect(st.f_bsize >= 4096 &&
 	       ((uint64_t)st.f_bsize & ((uint64_t)st.f_bsize - 1)) == 0,
 	       "filesystem block size is not a supported power of two");
+	system_page_size = page_size;
 
 	dirfd = open(argv[1], O_RDONLY | O_DIRECTORY);
 	if (dirfd < 0)
@@ -245,7 +347,7 @@ int main(int argc, char **argv)
 
 	for (i = 0; i < iterations; i++) {
 		struct model_file *file = &files[next_random() % FILE_COUNT];
-		unsigned int op = next_random() % 16;
+		unsigned int op = next_random() % 23;
 
 		current_iteration = i;
 		current_operation = op;
@@ -264,6 +366,10 @@ int main(int argc, char **argv)
 			reopen_file(file);
 		} else if (op == 13) {
 			recreate_file(file, dirfd);
+		} else if (op < 16) {
+			mmap_write_random(file, i, write_buf);
+		} else if (op < 21) {
+			fallocate_random(file, op - 16);
 		} else if (file->size) {
 			size_t offset = next_random() % file->size;
 			size_t len = 1 + next_random() % 65536;
