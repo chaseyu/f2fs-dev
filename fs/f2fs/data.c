@@ -2654,6 +2654,29 @@ bool ffs_test_blk_uptodate(const struct folio *folio, pgoff_t index)
 	return test_bit(idx, ffs->state);
 }
 
+bool ffs_test_blk_dirty(struct folio *folio, pgoff_t index)
+{
+	struct f2fs_sb_info *sbi = F2FS_F_SB(folio);
+	struct f2fs_folio_state *ffs;
+	unsigned int nr_blocks = f2fs_blocks_per_folio(sbi, folio);
+	unsigned int idx;
+	unsigned long flags;
+	bool dirty;
+
+	if (!folio_has_ffs(folio))
+		return folio_test_dirty(folio);
+
+	ffs = folio->private;
+	idx = index - f2fs_folio_lblk(sbi, folio);
+	if (WARN_ON_ONCE(idx >= nr_blocks))
+		return false;
+
+	spin_lock_irqsave(&ffs->state_lock, flags);
+	dirty = test_bit(nr_blocks + idx, ffs->state);
+	spin_unlock_irqrestore(&ffs->state_lock, flags);
+	return dirty;
+}
+
 static void ffs_mark_subrange_uptodate(struct folio *folio, size_t offset,
 				       size_t len)
 {
@@ -4563,8 +4586,8 @@ out:
 	return err;
 }
 
-static int prepare_subpage_write_begin(struct inode *inode,
-				       struct folio *folio, loff_t pos, unsigned int len)
+static int prepare_subpage_write(struct inode *inode, struct folio *folio,
+				 loff_t pos, unsigned int len, bool read_full)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	loff_t end = min_t(loff_t, pos + len,
@@ -4587,13 +4610,25 @@ static int prepare_subpage_write_begin(struct inode *inode,
 		loff_t block_start = F2FS_BLK_TO_BYTES(sbi, index);
 		loff_t block_end = block_start + F2FS_BLKSIZE(sbi);
 
-		if (pos <= block_start && end >= block_end)
+		if (!read_full && pos <= block_start && end >= block_end)
 			continue;
 		err = f2fs_read_subpage_for_write(inode, folio, index);
 		if (err)
 			return err;
 	}
 	return 0;
+}
+
+static int f2fs_prepare_subpage_write(struct inode *inode, struct folio *folio,
+				      loff_t pos, unsigned int len)
+{
+	return prepare_subpage_write(inode, folio, pos, len, false);
+}
+
+int f2fs_prepare_subpage_mkwrite(struct inode *inode, struct folio *folio,
+				 loff_t pos, unsigned int len)
+{
+	return prepare_subpage_write(inode, folio, pos, len, true);
 }
 
 static int f2fs_subpage_write_begin(struct address_space *mapping,
@@ -4615,7 +4650,7 @@ static int f2fs_subpage_write_begin(struct address_space *mapping,
 		return PTR_ERR(folio);
 
 	f2fs_folio_wait_writeback(folio, DATA, false, true);
-	err = prepare_subpage_write_begin(inode, folio, pos, len);
+	err = f2fs_prepare_subpage_write(inode, folio, pos, len);
 	if (err) {
 		f2fs_folio_put(folio, true);
 		return err;
