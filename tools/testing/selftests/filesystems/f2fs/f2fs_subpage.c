@@ -670,17 +670,66 @@ static void test_orphan_checkpoint(const char *dir, int dirfd)
 		fail("close orphan file");
 }
 
+static void test_encrypted_io(const char *dir, int dirfd)
+{
+	const size_t raw_key_size = FSCRYPT_MAX_KEY_SIZE;
+	struct fscrypt_add_key_arg *key;
+	struct fscrypt_policy_v2 policy = {
+		.version = FSCRYPT_POLICY_V2,
+		.contents_encryption_mode = FSCRYPT_MODE_AES_256_XTS,
+		.filenames_encryption_mode = FSCRYPT_MODE_AES_256_CTS,
+		.flags = FSCRYPT_POLICY_FLAGS_PAD_16 |
+			 FSCRYPT_POLICY_FLAG_IV_INO_LBLK_64,
+		.log2_data_unit_size = 12,
+	};
+	char crypt_path[PATH_MAX];
+	int fd;
+	int len;
+
+	key = calloc(1, sizeof(*key) + raw_key_size);
+	expect(key, "allocate fscrypt key");
+	key->key_spec.type = FSCRYPT_KEY_SPEC_TYPE_IDENTIFIER;
+	key->raw_size = raw_key_size;
+	fill_pattern(key->raw, raw_key_size, 31);
+	if (ioctl(dirfd, FS_IOC_ADD_ENCRYPTION_KEY, key)) {
+		if (errno == EOPNOTSUPP || errno == ENOTTY) {
+			printf("SKIP: filesystem has no fscrypt support\n");
+			free(key);
+			return;
+		}
+		fail("FS_IOC_ADD_ENCRYPTION_KEY");
+	}
+	memcpy(policy.master_key_identifier, key->key_spec.u.identifier,
+	       sizeof(policy.master_key_identifier));
+	free(key);
+
+	len = snprintf(crypt_path, sizeof(crypt_path), "%s/subpage-crypt-%ld",
+		       dir, (long)getpid());
+	expect(len > 0 && (size_t)len < sizeof(crypt_path),
+	       "encrypted test path too long");
+	if (mkdir(crypt_path, 0700))
+		fail("mkdir encrypted test directory");
+	fd = open(crypt_path, O_RDONLY | O_DIRECTORY);
+	if (fd < 0)
+		fail("open encrypted test directory");
+	if (ioctl(fd, FS_IOC_SET_ENCRYPTION_POLICY, &policy) && errno != EEXIST)
+		fail("FS_IOC_SET_ENCRYPTION_POLICY");
+	if (close(fd))
+		fail("close encrypted test directory");
+
+	test_buffered_io(crypt_path);
+	test_fallocate(crypt_path);
+	test_mmap_sparse_and_truncate(crypt_path);
+	test_mmap_concurrent_writeback(crypt_path);
+	test_sync_and_sparse(crypt_path);
+}
+
 static void test_rejected_mutating_features(const char *dir, int dirfd)
 {
 	struct fsverity_enable_arg verity = {
 		.version = 1,
 		.hash_algorithm = FS_VERITY_HASH_ALG_SHA256,
 		.block_size = 4096,
-	};
-	struct fscrypt_policy_v2 policy = {
-		.version = FSCRYPT_POLICY_V2,
-		.contents_encryption_mode = FSCRYPT_MODE_AES_256_XTS,
-		.filenames_encryption_mode = FSCRYPT_MODE_AES_256_CTS,
 	};
 	struct f2fs_defragment defrag = {
 		.start = 0,
@@ -694,7 +743,6 @@ static void test_rejected_mutating_features(const char *dir, int dirfd)
 	uint64_t block_count = 0;
 	uint32_t pin = 1;
 	char path[PATH_MAX];
-	char crypt_path[PATH_MAX];
 	int flags;
 	int fd;
 
@@ -737,21 +785,6 @@ static void test_rejected_mutating_features(const char *dir, int dirfd)
 	       errno == EOPNOTSUPP, "verity enable was not rejected");
 	if (close(fd))
 		fail("close verity feature file");
-
-	make_path(crypt_path, sizeof(crypt_path), dir, "subpage-crypt-dir");
-	rmdir(crypt_path);
-	if (mkdir(crypt_path, 0700))
-		fail("mkdir encryption feature directory");
-	fd = open(crypt_path, O_RDONLY | O_DIRECTORY);
-	if (fd < 0)
-		fail("open encryption feature directory");
-	errno = 0;
-	expect(ioctl(fd, FS_IOC_SET_ENCRYPTION_POLICY, &policy) == -1 &&
-	       errno == EOPNOTSUPP, "encryption policy was not rejected");
-	if (close(fd))
-		fail("close encryption feature directory");
-	if (rmdir(crypt_path))
-		fail("rmdir encryption feature directory");
 }
 
 int main(int argc, char **argv)
@@ -787,6 +820,7 @@ int main(int argc, char **argv)
 	if (dirfd < 0)
 		fail("open mount directory");
 	test_orphan_checkpoint(argv[1], dirfd);
+	test_encrypted_io(argv[1], dirfd);
 	test_rejected_mutating_features(argv[1], dirfd);
 	test_gc_ioctl(dirfd);
 	if (fsync(dirfd))
