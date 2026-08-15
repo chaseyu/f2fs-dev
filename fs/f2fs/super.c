@@ -3766,9 +3766,6 @@ static int f2fs_set_context(struct inode *inode, const void *ctx, size_t len,
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 
-	if (f2fs_has_subpage_blocks(sbi))
-		return -EOPNOTSUPP;
-
 	/*
 	 * Encrypting the root directory is not allowed because fsck
 	 * expects lost+found directory to exist and remain unencrypted

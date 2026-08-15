@@ -714,8 +714,8 @@ static int f2fs_file_mmap_prepare(struct vm_area_desc *desc)
 		return -EOPNOTSUPP;
 	if (f2fs_has_subpage_blocks(F2FS_I_SB(inode)) &&
 	    vma_desc_test_all(desc, VMA_SHARED_BIT, VMA_MAYWRITE_BIT) &&
-	    (f2fs_is_pinned_file(inode) || f2fs_encrypted_file(inode) ||
-	     f2fs_is_atomic_file(inode) || f2fs_compressed_file(inode)))
+	    (f2fs_is_pinned_file(inode) || f2fs_is_atomic_file(inode) ||
+	     f2fs_compressed_file(inode)))
 		return -EOPNOTSUPP;
 
 	file_accessed(file);
@@ -776,10 +776,6 @@ static int f2fs_file_open(struct inode *inode, struct file *filp)
 
 	if (!f2fs_is_compress_backend_ready(inode))
 		return -EOPNOTSUPP;
-	if (f2fs_has_subpage_blocks(F2FS_I_SB(inode)) &&
-	    f2fs_encrypted_file(inode) && filp->f_mode & FMODE_WRITE)
-		return -EOPNOTSUPP;
-
 	if (mapping_large_folio_support(inode->i_mapping) &&
 	    filp->f_mode & FMODE_WRITE)
 		return -EOPNOTSUPP;
@@ -2218,8 +2214,8 @@ static long f2fs_fallocate(struct file *file, int mode,
 		/* Block exchange still needs same-folio source/destination handling. */
 		if (mode & (FALLOC_FL_COLLAPSE_RANGE | FALLOC_FL_INSERT_RANGE))
 			return -EOPNOTSUPP;
-		if (f2fs_is_pinned_file(inode) || f2fs_encrypted_file(inode) ||
-		    f2fs_is_atomic_file(inode) || f2fs_compressed_file(inode))
+		if (f2fs_is_pinned_file(inode) || f2fs_is_atomic_file(inode) ||
+		    f2fs_compressed_file(inode))
 			return -EOPNOTSUPP;
 	}
 
@@ -2888,10 +2884,6 @@ static int f2fs_ioc_set_encryption_policy(struct file *filp, unsigned long arg)
 {
 	struct inode *inode = file_inode(filp);
 	int ret;
-
-	/* Encrypted subpage writeback needs per-block bounce-buffer support. */
-	if (f2fs_has_subpage_blocks(F2FS_I_SB(inode)))
-		return -EOPNOTSUPP;
 
 	if (!f2fs_sb_has_encrypt(F2FS_I_SB(inode)))
 		return -EOPNOTSUPP;
