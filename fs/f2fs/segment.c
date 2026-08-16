@@ -3806,7 +3806,7 @@ static int __get_segment_type_6(struct f2fs_io_info *fio)
 		if (is_inode_flag_set(inode, FI_ALIGNED_WRITE))
 			return CURSEG_COLD_DATA_PINNED;
 
-		if (page_private_gcing(fio->page)) {
+		if (folio_test_f2fs_gcing(page_folio(fio->page))) {
 			if (fio->sbi->am.atgc_enabled &&
 				(fio->io_type == FS_DATA_IO) &&
 				(fio->sbi->gc_mode != GC_URGENT_HIGH) &&
@@ -3819,7 +3819,10 @@ static int __get_segment_type_6(struct f2fs_io_info *fio)
 		if (file_is_cold(inode) || f2fs_need_compress_data(inode))
 			return CURSEG_COLD_DATA;
 
-		type = __get_age_segment_type(inode, fio->folio->index);
+		type = __get_age_segment_type(inode,
+					      f2fs_folio_lblk(fio->sbi,
+							fio->folio) +
+				fio->index);
 		if (type != NO_CHECK_TYPE)
 			return type;
 
@@ -4165,7 +4168,7 @@ void f2fs_do_write_node_page(unsigned int nid, struct f2fs_io_info *fio)
 	do_write_page(&sum, fio);
 
 	f2fs_update_iostat(fio->sbi, NULL, fio->io_type,
-					F2FS_BLKSIZE(fio->sbi));
+			   F2FS_BLKSIZE(fio->sbi));
 }
 
 void f2fs_outplace_write_data(struct dnode_of_data *dn,
@@ -4181,8 +4184,7 @@ void f2fs_outplace_write_data(struct dnode_of_data *dn,
 	do_write_page(&sum, fio);
 	f2fs_update_data_blkaddr(dn, fio->new_blkaddr);
 
-	f2fs_update_iostat(sbi, dn->inode, fio->io_type,
-					F2FS_BLKSIZE(sbi));
+	f2fs_update_iostat(sbi, dn->inode, fio->io_type, F2FS_BLKSIZE(sbi));
 }
 
 int f2fs_inplace_write_data(struct f2fs_io_info *fio)

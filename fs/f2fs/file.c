@@ -812,35 +812,41 @@ next:
 static int truncate_partial_data_page(struct inode *inode, u64 from,
 								bool cache_only)
 {
+	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	loff_t offset = from & (PAGE_SIZE - 1);
-	pgoff_t index = from >> PAGE_SHIFT;
+	loff_t block_offset = from & F2FS_BLKSIZE_MASK(sbi);
+	pgoff_t folio_index = from >> PAGE_SHIFT;
+	pgoff_t block_index = F2FS_BYTES_TO_BLK(sbi, from);
 	struct address_space *mapping = inode->i_mapping;
 	struct folio *folio;
 
-	if (!offset && !cache_only)
+	if (!block_offset && !cache_only)
 		return 0;
 
 	if (cache_only) {
-		folio = filemap_lock_folio(mapping, index);
+		folio = filemap_lock_folio(mapping, folio_index);
 		if (IS_ERR(folio))
 		       return 0;
-		if (folio_test_uptodate(folio))
+		if (ffs_test_blk_uptodate(folio, block_index))
 			goto truncate_out;
 		f2fs_folio_put(folio, true);
 		return 0;
 	}
 
-	folio = f2fs_get_lock_data_folio(inode, index, true);
+	folio = f2fs_get_lock_data_folio(inode, block_index, true);
 	if (IS_ERR(folio))
 		return PTR_ERR(folio) == -ENOENT ? 0 : PTR_ERR(folio);
 truncate_out:
 	f2fs_folio_wait_writeback(folio, DATA, true, true);
-	folio_zero_segment(folio, offset, folio_size(folio));
+	folio_zero_range(folio, offset, F2FS_BLKSIZE(sbi) - block_offset);
 
 	/* An encrypted inode should have a key and truncate the last page. */
-	f2fs_bug_on(F2FS_I_SB(inode), cache_only && IS_ENCRYPTED(inode));
-	if (!cache_only)
+	f2fs_bug_on(sbi, cache_only && IS_ENCRYPTED(inode));
+	if (!cache_only) {
+		ffs_mark_subrange_dirty(folio, offset,
+					F2FS_BLKSIZE(sbi) - block_offset);
 		folio_mark_dirty(folio);
+	}
 	f2fs_folio_put(folio, true);
 	return 0;
 }
@@ -864,7 +870,7 @@ int f2fs_do_truncate_blocks(struct inode *inode, u64 from, bool lock)
 
 	free_from = (pgoff_t)F2FS_BLK_ALIGN(sbi, from);
 
-	if (free_from >= max_file_blocks(sbi, inode))
+	if (free_from >= max_file_blocks(F2FS_I_SB(inode), inode))
 		goto free_partial;
 
 	if (lock)
@@ -1021,6 +1027,9 @@ int f2fs_truncate(struct inode *inode)
 static bool f2fs_force_buffered_io(struct inode *inode, int rw)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
+
+	if (f2fs_has_subpage_blocks(sbi))
+		return true;
 
 	if (!fscrypt_dio_supported(inode))
 		return true;
@@ -2109,6 +2118,15 @@ static long f2fs_fallocate(struct file *file, int mode,
 	struct inode *inode = file_inode(file);
 	long ret = 0;
 
+	/*
+	 * Range manipulation still indexes the page cache in PAGE_SIZE units.
+	 * Reject it until those paths track filesystem blocks independently;
+	 * silently applying them to a subpage filesystem can remap or discard
+	 * neighboring blocks in the same base folio.
+	 */
+	if (f2fs_has_subpage_blocks(F2FS_I_SB(inode)))
+		return -EOPNOTSUPP;
+
 	if (unlikely(f2fs_cp_error(F2FS_I_SB(inode))))
 		return -EIO;
 	if (!f2fs_is_checkpoint_ready(F2FS_I_SB(inode)))
@@ -2250,6 +2268,9 @@ static int f2fs_setflags_common(struct inode *inode, u32 iflags, u32 mask)
 	}
 
 	if ((iflags ^ masked_flags) & F2FS_COMPR_FL) {
+		if (f2fs_has_subpage_blocks(F2FS_I_SB(inode)))
+			return -EOPNOTSUPP;
+
 		if (masked_flags & F2FS_COMPR_FL) {
 			if (!f2fs_disable_compressed_file(inode))
 				return -EINVAL;
@@ -2389,6 +2410,9 @@ static int f2fs_ioc_start_atomic_write(struct file *filp, bool truncate)
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	loff_t isize;
 	int ret;
+
+	if (f2fs_has_subpage_blocks(sbi))
+		return -EOPNOTSUPP;
 
 	if (!(filp->f_mode & FMODE_WRITE))
 		return -EBADF;
@@ -2667,8 +2691,8 @@ static int f2fs_keep_noreuse_range(struct inode *inode,
 				loff_t offset, loff_t len)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
-	u64 max_bytes = F2FS_BLK_TO_BYTES(sbi,
-					max_file_blocks(sbi, inode));
+	u64 max_bytes = F2FS_BLK_TO_BYTES(F2FS_I_SB(inode),
+			max_file_blocks(F2FS_I_SB(inode), inode));
 	u64 start, end;
 	int ret = 0;
 
@@ -2768,6 +2792,10 @@ static int f2fs_ioc_set_encryption_policy(struct file *filp, unsigned long arg)
 {
 	struct inode *inode = file_inode(filp);
 	int ret;
+
+	/* Encrypted subpage writeback needs per-block bounce-buffer support. */
+	if (f2fs_has_subpage_blocks(F2FS_I_SB(inode)))
+		return -EOPNOTSUPP;
 
 	if (!f2fs_sb_has_encrypt(F2FS_I_SB(inode)))
 		return -EOPNOTSUPP;
@@ -3191,6 +3219,9 @@ static int f2fs_ioc_defragment(struct file *filp, unsigned long arg)
 	struct f2fs_defragment range;
 	int err;
 
+	if (f2fs_has_subpage_blocks(sbi))
+		return -EOPNOTSUPP;
+
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
@@ -3213,7 +3244,7 @@ static int f2fs_ioc_defragment(struct file *filp, unsigned long arg)
 		return -EINVAL;
 
 	if (unlikely(F2FS_BYTES_TO_BLK(sbi, range.start + range.len) >
-					max_file_blocks(sbi, inode)))
+					max_file_blocks(F2FS_I_SB(inode), inode)))
 		return -EINVAL;
 
 	err = mnt_want_write_file(filp);
@@ -3348,7 +3379,7 @@ static int f2fs_move_file_range(struct file *file_in, loff_t pos_in,
 
 	f2fs_lock_op(sbi, &lc);
 	ret = __exchange_data_block(src, dst, F2FS_BYTES_TO_BLK(sbi, pos_in),
-				F2FS_BYTES_TO_BLK(sbi, pos_out),
+				    F2FS_BYTES_TO_BLK(sbi, pos_out),
 				F2FS_BYTES_TO_BLK(sbi, len), false);
 
 	if (!ret) {
@@ -3412,6 +3443,9 @@ static int __f2fs_ioc_move_range(struct file *filp,
 static int f2fs_ioc_move_range(struct file *filp, unsigned long arg)
 {
 	struct f2fs_move_range range;
+
+	if (f2fs_has_subpage_blocks(F2FS_I_SB(file_inode(filp))))
+		return -EOPNOTSUPP;
 
 	if (copy_from_user(&range, (struct f2fs_move_range __user *)arg,
 							sizeof(range)))
@@ -3662,6 +3696,9 @@ static int f2fs_ioc_set_pin_file(struct file *filp, unsigned long arg)
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	__u32 pin;
 	int ret = 0;
+
+	if (f2fs_has_subpage_blocks(sbi))
+		return -EOPNOTSUPP;
 
 	if (get_user(pin, (__u32 __user *)arg))
 		return -EFAULT;
@@ -4042,6 +4079,9 @@ static int f2fs_ioc_resize_fs(struct file *filp, unsigned long arg)
 	struct f2fs_sb_info *sbi = F2FS_I_SB(file_inode(filp));
 	__u64 block_count;
 
+	if (f2fs_has_subpage_blocks(sbi))
+		return -EOPNOTSUPP;
+
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
@@ -4058,6 +4098,9 @@ static int f2fs_ioc_resize_fs(struct file *filp, unsigned long arg)
 static int f2fs_ioc_enable_verity(struct file *filp, unsigned long arg)
 {
 	struct inode *inode = file_inode(filp);
+
+	if (f2fs_has_subpage_blocks(F2FS_I_SB(inode)))
+		return -EOPNOTSUPP;
 
 	f2fs_update_time(F2FS_I_SB(inode), REQ_TIME);
 
@@ -4237,6 +4280,9 @@ static int f2fs_release_compress_blocks(struct file *filp, unsigned long arg)
 	pgoff_t page_idx = 0, last_idx;
 	unsigned int released_blocks = 0;
 	int ret;
+
+	if (f2fs_has_subpage_blocks(F2FS_I_SB(inode)))
+		return -EOPNOTSUPP;
 	int writecount;
 
 	if (!f2fs_sb_has_compression(sbi))
@@ -4433,6 +4479,9 @@ static int f2fs_reserve_compress_blocks(struct file *filp, unsigned long arg)
 	pgoff_t page_idx = 0, last_idx;
 	unsigned int reserved_blocks = 0;
 	int ret;
+
+	if (f2fs_has_subpage_blocks(sbi))
+		return -EOPNOTSUPP;
 
 	if (!f2fs_sb_has_compression(sbi))
 		return -EOPNOTSUPP;
@@ -4755,6 +4804,9 @@ static int f2fs_ioc_set_compress_option(struct file *filp, unsigned long arg)
 	struct f2fs_comp_option option;
 	int ret = 0;
 
+	if (f2fs_has_subpage_blocks(sbi))
+		return -EOPNOTSUPP;
+
 	if (!f2fs_sb_has_compression(sbi))
 		return -EOPNOTSUPP;
 
@@ -4864,6 +4916,9 @@ static int f2fs_ioc_decompress_file(struct file *filp)
 	pgoff_t page_idx = 0, last_idx, cluster_idx;
 	int ret;
 
+	if (f2fs_has_subpage_blocks(sbi))
+		return -EOPNOTSUPP;
+
 	if (!f2fs_sb_has_compression(sbi) ||
 			F2FS_OPTION(sbi).compress_mode != COMPR_MODE_USER)
 		return -EOPNOTSUPP;
@@ -4944,6 +4999,9 @@ static int f2fs_ioc_compress_file(struct file *filp)
 	struct f2fs_inode_info *fi = F2FS_I(inode);
 	pgoff_t page_idx = 0, last_idx, cluster_idx;
 	int ret;
+
+	if (f2fs_has_subpage_blocks(sbi))
+		return -EOPNOTSUPP;
 
 	if (!f2fs_sb_has_compression(sbi) ||
 			F2FS_OPTION(sbi).compress_mode != COMPR_MODE_USER)
