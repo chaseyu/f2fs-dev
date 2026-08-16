@@ -1350,6 +1350,8 @@ struct f2fs_io_info {
 	blk_opf_t op_flags;	/* req_flag_bits */
 	block_t new_blkaddr;	/* new block address to be written */
 	block_t old_blkaddr;	/* old block address before Cow */
+	unsigned int index;	/* filesystem block offset in the folio */
+	unsigned int count;	/* number of filesystem blocks */
 	union {
 		struct page *page;	/* page to be written */
 		struct folio *folio;
@@ -1621,6 +1623,14 @@ static inline void f2fs_clear_bit(unsigned int nr, char *addr);
  * Layout B: lowest bit should be 0
  * page.private is a wrapped pointer.
  */
+struct f2fs_folio_state {
+	spinlock_t		state_lock; /* protects state and read_blocks_pending */
+	unsigned int		read_blocks_pending;
+	atomic_t		write_blocks_pending;
+	unsigned long		private_flags;
+	unsigned long		state[];
+};
+
 enum {
 	PAGE_PRIVATE_NOT_POINTER,		/* private contains non-pointer data */
 	PAGE_PRIVATE_ONGOING_MIGRATION,		/* data page which is on-going migrating */
@@ -2799,9 +2809,15 @@ release_quota:
 #define PAGE_PRIVATE_GET_FUNC(name, flagname) \
 static inline bool folio_test_f2fs_##name(const struct folio *folio)	\
 {									\
-	unsigned long priv = (unsigned long)folio->private;		\
+	unsigned long priv;						\
 	unsigned long v = (1UL << PAGE_PRIVATE_NOT_POINTER) |		\
 			     (1UL << PAGE_PRIVATE_##flagname);		\
+	if (folio_has_ffs(folio)) {					\
+		struct f2fs_folio_state *ffs = folio->private;		\
+		priv = ffs->private_flags;				\
+	} else {							\
+		priv = (unsigned long)folio->private;			\
+	}								\
 	return (priv & v) == v;						\
 }									\
 static inline bool page_private_##name(struct page *page) \
@@ -2816,7 +2832,10 @@ static inline void folio_set_f2fs_##name(struct folio *folio)		\
 {									\
 	unsigned long v = (1UL << PAGE_PRIVATE_NOT_POINTER) |		\
 			     (1UL << PAGE_PRIVATE_##flagname);		\
-	if (!folio->private)						\
+	if (folio_has_ffs(folio)) {					\
+		struct f2fs_folio_state *ffs = folio->private;		\
+		ffs->private_flags |= v;					\
+	} else if (!folio->private)					\
 		folio_attach_private(folio, (void *)v);			\
 	else {								\
 		v |= (unsigned long)folio->private;			\
@@ -2834,13 +2853,17 @@ static inline void set_page_private_##name(struct page *page) \
 #define PAGE_PRIVATE_CLEAR_FUNC(name, flagname) \
 static inline void folio_clear_f2fs_##name(struct folio *folio)		\
 {									\
-	unsigned long v = (unsigned long)folio->private;		\
-									\
-	v &= ~(1UL << PAGE_PRIVATE_##flagname);				\
-	if (v == (1UL << PAGE_PRIVATE_NOT_POINTER))			\
-		folio_detach_private(folio);				\
-	else								\
-		folio->private = (void *)v;				\
+	if (folio_has_ffs(folio)) {					\
+		struct f2fs_folio_state *ffs = folio->private;		\
+		ffs->private_flags &= ~(1UL << PAGE_PRIVATE_##flagname); \
+	} else {							\
+		unsigned long v = (unsigned long)folio->private;	\
+		v &= ~(1UL << PAGE_PRIVATE_##flagname);			\
+		if (v == (1UL << PAGE_PRIVATE_NOT_POINTER))		\
+			folio_detach_private(folio);			\
+		else							\
+			folio->private = (void *)v;			\
+	}								\
 }									\
 static inline void clear_page_private_##name(struct page *page) \
 { \
@@ -2866,7 +2889,12 @@ PAGE_PRIVATE_CLEAR_FUNC(atomic, ATOMIC_WRITE);
 
 static inline unsigned long folio_get_f2fs_data(struct folio *folio)
 {
-	unsigned long data = (unsigned long)folio->private;
+	unsigned long data;
+
+	if (folio_has_ffs(folio))
+		data = ((struct f2fs_folio_state *)folio->private)->private_flags;
+	else
+		data = (unsigned long)folio->private;
 
 	if (!test_bit(PAGE_PRIVATE_NOT_POINTER, &data))
 		return 0;
@@ -2877,10 +2905,15 @@ static inline void folio_set_f2fs_data(struct folio *folio, unsigned long data)
 {
 	data = (1UL << PAGE_PRIVATE_NOT_POINTER) | (data << PAGE_PRIVATE_MAX);
 
-	if (!folio_test_private(folio))
+	if (folio_has_ffs(folio)) {
+		struct f2fs_folio_state *ffs = folio->private;
+
+		ffs->private_flags |= data;
+	} else if (!folio_test_private(folio)) {
 		folio_attach_private(folio, (void *)data);
-	else
+	} else {
 		folio->private = (void *)((unsigned long)folio->private | data);
+	}
 }
 
 static inline void dec_valid_block_count(struct f2fs_sb_info *sbi,
@@ -4392,6 +4425,12 @@ int f2fs_write_single_data_page(struct folio *folio, int *submitted,
 				struct writeback_control *wbc,
 				enum iostat_type io_type,
 				int compr_blocks, bool allow_balance);
+bool ffs_test_blk_uptodate(const struct folio *folio, pgoff_t index);
+void ffs_clear_subrange_uptodate(struct folio *folio, size_t offset,
+				 size_t len);
+void ffs_mark_subrange_dirty(struct folio *folio, size_t offset, size_t len);
+void ffs_clear_subrange_dirty(struct folio *folio, size_t offset, size_t len);
+bool ffs_has_dirty_blocks(struct folio *folio);
 void f2fs_write_failed(struct inode *inode, loff_t to);
 void f2fs_invalidate_folio(struct folio *folio, size_t offset, size_t length);
 bool f2fs_release_folio(struct folio *folio, gfp_t wait);
@@ -5335,9 +5374,8 @@ static inline void f2fs_truncate_meta_inode_pages(struct f2fs_sb_info *sbi,
 							NULL, 0, DATA);
 
 	truncate_inode_pages_range(META_MAPPING(sbi),
-			F2FS_BLK_TO_BYTES(sbi, (loff_t)blkaddr),
-			F2FS_BLK_END_BYTES(sbi,
-					    (loff_t)(blkaddr + cnt - 1)));
+			(loff_t)blkaddr << PAGE_SHIFT,
+			(((loff_t)blkaddr + cnt) << PAGE_SHIFT) - 1);
 }
 
 static inline void f2fs_invalidate_internal_cache(struct f2fs_sb_info *sbi,

@@ -133,9 +133,12 @@ static vm_fault_t f2fs_vm_page_mkwrite(struct vm_fault *vmf)
 	 * Don't make any dirty pages.
 	 */
 	if (unlikely(IS_IMMUTABLE(inode)) ||
+	    f2fs_has_subpage_blocks(sbi) ||
 	    mapping_large_folio_support(inode->i_mapping)) {
-		f2fs_err(sbi, "Not expected: immutable: %d large_folio: %d",
+		f2fs_err(sbi,
+			 "Not expected: immutable: %d subpage: %d large_folio: %d",
 				IS_IMMUTABLE(inode),
+				f2fs_has_subpage_blocks(sbi),
 				mapping_large_folio_support(inode->i_mapping));
 		return VM_FAULT_SIGBUS;
 	}
@@ -496,7 +499,9 @@ static bool __found_offset(struct address_space *mapping,
 		if (__is_valid_data_blkaddr(blkaddr))
 			return true;
 		if (blkaddr == NEW_ADDR &&
-		    xa_get_mark(&mapping->i_pages, index, PAGECACHE_TAG_DIRTY))
+		    xa_get_mark(&mapping->i_pages,
+				f2fs_lblk_to_folio_index(F2FS_I_SB(inode), index),
+				PAGECACHE_TAG_DIRTY))
 			return true;
 		if (compressed_cluster)
 			return true;
@@ -515,8 +520,8 @@ static loff_t f2fs_seek_block(struct file *file, loff_t offset, int whence)
 {
 	struct inode *inode = file->f_mapping->host;
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
-	loff_t maxbytes = F2FS_BLK_TO_BYTES(sbi,
-					max_file_blocks(sbi, inode));
+	loff_t maxbytes = F2FS_BLK_TO_BYTES(F2FS_I_SB(inode),
+			max_file_blocks(F2FS_I_SB(inode), inode));
 	struct dnode_of_data dn;
 	pgoff_t pgofs, end_offset;
 	loff_t data_ofs = offset;
@@ -628,6 +633,9 @@ static int f2fs_file_mmap_prepare(struct vm_area_desc *desc)
 
 	if (!f2fs_is_compress_backend_ready(inode))
 		return -EOPNOTSUPP;
+	if (f2fs_has_subpage_blocks(F2FS_I_SB(inode)) &&
+	    vma_desc_test_all(desc, VMA_SHARED_BIT, VMA_MAYWRITE_BIT))
+		return -EOPNOTSUPP;
 
 	file_accessed(file);
 	desc->vm_ops = &f2fs_file_vm_ops;
@@ -686,6 +694,9 @@ static int f2fs_file_open(struct inode *inode, struct file *filp)
 		return err;
 
 	if (!f2fs_is_compress_backend_ready(inode))
+		return -EOPNOTSUPP;
+	if (f2fs_has_subpage_blocks(F2FS_I_SB(inode)) &&
+	    f2fs_encrypted_file(inode) && filp->f_mode & FMODE_WRITE)
 		return -EOPNOTSUPP;
 
 	if (mapping_large_folio_support(inode->i_mapping) &&

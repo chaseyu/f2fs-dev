@@ -74,9 +74,8 @@ static pgoff_t start_idx_of_cluster(struct compress_ctx *cc)
 
 bool f2fs_is_compressed_page(struct folio *folio)
 {
-	if (!folio->private)
-		return false;
-	if (folio_test_f2fs_nonpointer(folio))
+	if (!folio->private || folio_has_ffs(folio) ||
+	    folio_test_f2fs_nonpointer(folio))
 		return false;
 
 	f2fs_bug_on(F2FS_F_SB(folio),
@@ -548,6 +547,8 @@ bool f2fs_is_compress_backend_ready(struct inode *inode)
 {
 	if (!f2fs_compressed_file(inode))
 		return true;
+	if (f2fs_has_subpage_blocks(F2FS_I_SB(inode)))
+		return false;
 	return f2fs_cops[F2FS_I(inode)->i_compress_algorithm];
 }
 
