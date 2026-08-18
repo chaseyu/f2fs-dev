@@ -18,6 +18,7 @@
 #include "f2fs.h"
 #include "cache.h"
 #include "node.h"
+#include <trace/events/f2fs.h>
 #include "segment.h"
 
 void f2fs_cache_wait_writeback_cond(struct f2fs_cached_block *entry,
@@ -80,6 +81,7 @@ bool f2fs_mark_cache_dirty(struct f2fs_cached_block *entry)
 		enum count_type type = IS_META_CACHE(cache) ?
 				F2FS_DIRTY_META : F2FS_DIRTY_NODES;
 
+		trace_f2fs_cache_set_dirty(entry, IS_META_CACHE(cache) ? META : NODE);
 		f2fs_cache_update_tag(entry, 0, F2FS_CACHE_TAG_DIRTY);
 		inc_page_count(cache->sbi, type);
 		return true;
