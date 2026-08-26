@@ -855,9 +855,10 @@ static int f2fs_parse_param(struct fs_context *fc, struct fs_parameter *param)
 		break;
 	case Opt_inline_xattr_size:
 		if (result.int_32 < MIN_INLINE_XATTR_SIZE ||
-			result.int_32 > MAX_INLINE_XATTR_SIZE) {
-			f2fs_err(NULL, "inline xattr size is out of range: %u ~ %u",
-				 (u32)MIN_INLINE_XATTR_SIZE, (u32)MAX_INLINE_XATTR_SIZE);
+			result.int_32 > MAX_INLINE_XATTR_SIZE_FOR_BLOCKSIZE(F2FS_MIN_BLKSIZE)) {
+			f2fs_err(NULL, "inline xattr size is out of range: %u ~ %lu",
+				 (u32)MIN_INLINE_XATTR_SIZE,
+				 MAX_INLINE_XATTR_SIZE_FOR_BLOCKSIZE(F2FS_MIN_BLKSIZE));
 			return -EINVAL;
 		}
 		ctx_set_opt(ctx, F2FS_MOUNT_INLINE_XATTR_SIZE);
