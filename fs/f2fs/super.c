@@ -3922,8 +3922,8 @@ static int __f2fs_commit_super(struct f2fs_sb_info *sbi, struct folio *folio,
 	folio_lock(folio);
 	folio_wait_writeback(folio);
 	if (update)
-		memcpy(F2FS_SUPER_BLOCK(folio, index), F2FS_RAW_SUPER(sbi),
-					sizeof(struct f2fs_super_block));
+		memcpy(F2FS_SUPER_BLOCK(sbi, folio, index), F2FS_RAW_SUPER(sbi),
+		       sizeof(struct f2fs_super_block));
 	folio_mark_dirty(folio);
 	folio_clear_dirty_for_io(folio);
 	folio_start_writeback(folio);
@@ -3950,7 +3950,8 @@ static int __f2fs_commit_super(struct f2fs_sb_info *sbi, struct folio *folio,
 static inline bool sanity_check_area_boundary(struct f2fs_sb_info *sbi,
 					struct folio *folio, pgoff_t index)
 {
-	struct f2fs_super_block *raw_super = F2FS_SUPER_BLOCK(folio, index);
+	struct f2fs_super_block *raw_super =
+		F2FS_SUPER_BLOCK(sbi, folio, index);
 	struct super_block *sb = sbi->sb;
 	u32 segment0_blkaddr = le32_to_cpu(raw_super->segment0_blkaddr);
 	u32 cp_blkaddr = le32_to_cpu(raw_super->cp_blkaddr);
@@ -4042,7 +4043,8 @@ static int sanity_check_raw_super(struct f2fs_sb_info *sbi,
 {
 	block_t segment_count, segs_per_sec, secs_per_zone, segment_count_main;
 	block_t total_sections, blocks_per_seg;
-	struct f2fs_super_block *raw_super = F2FS_SUPER_BLOCK(folio, index);
+	struct f2fs_super_block *raw_super =
+		F2FS_SUPER_BLOCK(sbi, folio, index);
 	size_t crc_offset = 0;
 	__u32 crc = 0;
 
@@ -4601,7 +4603,9 @@ static int read_raw_super_block(struct f2fs_sb_info *sbi,
 		return -ENOMEM;
 
 	for (block = 0; block < 2; block++) {
-		folio = read_mapping_folio(sb->s_bdev->bd_mapping, block, NULL);
+		folio = read_mapping_folio(sb->s_bdev->bd_mapping,
+					   ((pgoff_t)block << sbi->log_blocksize) >>
+				PAGE_SHIFT, NULL);
 		if (IS_ERR(folio)) {
 			f2fs_err(sbi, "Unable to read %dth superblock",
 				 block + 1);
@@ -4621,10 +4625,19 @@ static int read_raw_super_block(struct f2fs_sb_info *sbi,
 		}
 
 		if (!*raw_super) {
-			memcpy(super, F2FS_SUPER_BLOCK(folio, block),
-							sizeof(*super));
+			memcpy(super, F2FS_SUPER_BLOCK(sbi, folio, block),
+			       sizeof(*super));
 			*valid_super_block = block;
 			*raw_super = super;
+			sbi->log_blocksize =
+				le32_to_cpu(super->log_blocksize);
+			sbi->blocksize = BIT(sbi->log_blocksize);
+			if (!sb_set_blocksize(sb, sbi->blocksize)) {
+				f2fs_err(sbi, "unable to set blocksize %u",
+					 sbi->blocksize);
+				folio_put(folio);
+				return -EINVAL;
+			}
 		}
 		folio_put(folio);
 	}

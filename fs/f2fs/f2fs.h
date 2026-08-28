@@ -2292,15 +2292,10 @@ static inline struct f2fs_super_block *F2FS_RAW_SUPER(struct f2fs_sb_info *sbi)
 	return (struct f2fs_super_block *)(sbi->raw_super);
 }
 
-static inline struct f2fs_super_block *F2FS_SUPER_BLOCK(struct folio *folio,
-								pgoff_t index)
-{
-	pgoff_t idx_in_folio = index % folio_nr_pages(folio);
-
-	return (struct f2fs_super_block *)
-		(page_address(folio_page(folio, idx_in_folio)) +
-						F2FS_SUPER_OFFSET);
-}
+#define F2FS_SUPER_BLOCK(sbi, folio, index)				\
+	((struct f2fs_super_block *)(folio_address(folio) +		\
+		(((size_t)index << (sbi)->log_blocksize) &		\
+		 (folio_size(folio) - 1))))
 
 static inline struct f2fs_checkpoint *F2FS_CKPT(struct f2fs_sb_info *sbi)
 {

@@ -4753,10 +4753,10 @@ static void adjust_sit_entry_set(struct sit_entry_set *ses,
 }
 
 static void add_sit_entry(struct f2fs_sb_info *sbi, unsigned int segno,
-		struct list_head *head)
+		  struct list_head *head)
 {
 	struct sit_entry_set *ses;
-	unsigned int start_segno = START_SEGNO(sbi, segno);
+	unsigned int start_segno = f2fs_start_segno(sbi, segno);
 
 	list_for_each_entry(ses, head, set_list) {
 		if (ses->start_segno == start_segno) {
