@@ -3935,7 +3935,9 @@ static int __f2fs_commit_super(struct f2fs_sb_info *sbi, struct folio *folio,
 	bio->bi_iter.bi_sector =
 		((sector_t)index << sbi->log_blocksize) >> SECTOR_SHIFT;
 
-	if (!bio_add_folio(bio, folio, folio_size(folio), 0))
+	if (!bio_add_folio(bio, folio, sbi->blocksize,
+			   ((size_t)index << sbi->log_blocksize) &
+			(folio_size(folio) - 1)))
 		f2fs_bug_on(sbi, 1);
 
 	ret = submit_bio_wait(bio);
@@ -4066,11 +4068,11 @@ static int sanity_check_raw_super(struct f2fs_sb_info *sbi,
 		}
 	}
 
-	/* only support block_size equals to PAGE_SIZE */
-	if (le32_to_cpu(raw_super->log_blocksize) != F2FS_BLKSIZE_BITS) {
+	/* Continue to support only block_size equal to PAGE_SIZE. */
+	if (le32_to_cpu(raw_super->log_blocksize) != PAGE_SHIFT) {
 		f2fs_info(sbi, "Invalid log_blocksize (%u), supports only %u",
 			  le32_to_cpu(raw_super->log_blocksize),
-			  F2FS_BLKSIZE_BITS);
+			  PAGE_SHIFT);
 		return -EFSCORRUPTED;
 	}
 
@@ -4092,7 +4094,7 @@ static int sanity_check_raw_super(struct f2fs_sb_info *sbi,
 	}
 	if (le32_to_cpu(raw_super->log_sectors_per_block) +
 		le32_to_cpu(raw_super->log_sectorsize) !=
-			F2FS_MAX_LOG_SECTOR_SIZE) {
+			le32_to_cpu(raw_super->log_blocksize)) {
 		f2fs_info(sbi, "Invalid log sectors per block(%u) log sectorsize(%u)",
 			  le32_to_cpu(raw_super->log_sectors_per_block),
 			  le32_to_cpu(raw_super->log_sectorsize));
@@ -5144,8 +5146,10 @@ try_onemore:
 	}
 	mutex_init(&sbi->flush_lock);
 
-	/* set a block size */
-	if (unlikely(!sb_set_blocksize(sb, F2FS_BLKSIZE))) {
+	/* Read the first superblock with the minimum supported block size. */
+	sbi->log_blocksize = F2FS_MIN_LOG_BLOCKSIZE;
+	sbi->blocksize = F2FS_MIN_BLKSIZE;
+	if (unlikely(!sb_set_blocksize(sb, sbi->blocksize))) {
 		f2fs_err(sbi, "unable to set blocksize");
 		goto free_sbi;
 	}
