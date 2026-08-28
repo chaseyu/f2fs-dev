@@ -104,8 +104,8 @@ static inline void sanity_check_seg_type(struct f2fs_sb_info *sbi,
 	((segno) % (sit_i)->sents_per_block)
 #define SIT_BLOCK_OFFSET(sbi, segno)				\
 	((segno) / SIT_ENTRY_PER_BLOCK(sbi))
-static inline unsigned int f2fs_start_segno(struct f2fs_sb_info *sbi,
-						unsigned int segno)
+static inline unsigned int
+f2fs_start_segno(struct f2fs_sb_info *sbi, unsigned int segno)
 {
 	return SIT_BLOCK_OFFSET(sbi, segno) * SIT_ENTRY_PER_BLOCK(sbi);
 }

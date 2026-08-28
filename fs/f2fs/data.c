@@ -1970,6 +1970,7 @@ out:
 static bool __f2fs_overwrite_io(struct inode *inode, loff_t pos, size_t len,
 				bool check_first)
 {
+	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	struct f2fs_map_blocks map;
 	block_t last_lblk;
 	int err;
@@ -1977,12 +1978,12 @@ static bool __f2fs_overwrite_io(struct inode *inode, loff_t pos, size_t len,
 	if (pos + len > i_size_read(inode))
 		return false;
 
-	map.m_lblk = F2FS_BYTES_TO_BLK(F2FS_I_SB(inode), pos);
+	map.m_lblk = F2FS_BYTES_TO_BLK(sbi, pos);
 	map.m_next_pgofs = NULL;
 	map.m_next_extent = NULL;
 	map.m_seg_type = NO_CHECK_TYPE;
 	map.m_may_create = false;
-	last_lblk = F2FS_BLK_ALIGN(F2FS_I_SB(inode), pos + len);
+	last_lblk = F2FS_BLK_ALIGN(sbi, pos + len);
 
 	while (map.m_lblk < last_lblk) {
 		map.m_len = last_lblk - map.m_lblk;
@@ -2078,11 +2079,11 @@ static int f2fs_xattr_fiemap(struct inode *inode,
 int f2fs_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 		u64 start, u64 len)
 {
+	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	struct f2fs_map_blocks map;
 	sector_t start_blk, last_blk, blk_len, max_len;
 	pgoff_t next_pgofs;
 	u64 logical = 0, phys = 0, size = 0;
-	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	u32 flags = 0;
 	int ret = 0;
 	bool compr_cluster = false, compr_appended;
@@ -2671,7 +2672,7 @@ submit_and_realloc:
 		f2fs_wait_on_block_writeback(inode, block_nr);
 
 		if (!bio_add_folio(bio, folio, F2FS_BLKSIZE(F2FS_I_SB(inode)),
-				offset << PAGE_SHIFT))
+					offset << PAGE_SHIFT))
 			goto submit_and_realloc;
 
 		folio_in_bio = true;

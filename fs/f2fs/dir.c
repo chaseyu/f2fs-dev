@@ -1122,8 +1122,7 @@ static int f2fs_readdir(struct file *file, struct dir_context *ctx)
 
 		make_dentry_ptr_block(inode, &d, dentry_blk);
 
-		err = f2fs_fill_dentries(ctx, &d,
-				n * entries, &fstr);
+		err = f2fs_fill_dentries(ctx, &d, n * entries, &fstr);
 		f2fs_folio_put(dentry_folio, false);
 		if (err)
 			break;

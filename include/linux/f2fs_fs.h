@@ -29,10 +29,14 @@
 #define F2FS_BLKSIZE_MASK(sbi)		(F2FS_BLKSIZE(sbi) - 1)
 #define F2FS_LOG_SECTORS_PER_BLOCK(sbi)	(F2FS_BLKSIZE_BITS(sbi) - 9)
 #define F2FS_BLKS_PER_PAGE(sbi)		(PAGE_SIZE / F2FS_BLKSIZE(sbi))
-#define F2FS_BYTES_TO_BLK(sbi, bytes)		((unsigned long long)(bytes) >> F2FS_BLKSIZE_BITS(sbi))
-#define F2FS_BLK_TO_BYTES(sbi, blk)		((unsigned long long)(blk) << F2FS_BLKSIZE_BITS(sbi))
-#define F2FS_BLK_END_BYTES(sbi, blk)		(F2FS_BLK_TO_BYTES(sbi, (blk) + 1) - 1)
-#define F2FS_BLK_ALIGN(sbi, x)			DIV_ROUND_UP_ULL((x), F2FS_BLKSIZE(sbi))
+#define F2FS_BYTES_TO_BLK(sbi, bytes)	\
+	((unsigned long long)(bytes) >> F2FS_BLKSIZE_BITS(sbi))
+#define F2FS_BLK_TO_BYTES(sbi, blk)	\
+	((unsigned long long)(blk) << F2FS_BLKSIZE_BITS(sbi))
+#define F2FS_BLK_END_BYTES(sbi, blk)	\
+	(F2FS_BLK_TO_BYTES(sbi, (blk) + 1) - 1)
+#define F2FS_BLK_ALIGN(sbi, x)		\
+	DIV_ROUND_UP_ULL((x), F2FS_BLKSIZE(sbi))
 
 /* 0, 1(node nid), 2(meta nid) are reserved node id */
 #define F2FS_RESERVED_NODE_NUM		3

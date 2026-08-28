@@ -1856,10 +1856,10 @@ struct f2fs_sb_info {
 	unsigned int log_sectors_per_block;	/* log2 sectors per block */
 	unsigned int log_blocksize;		/* log2 block size */
 	unsigned int blocksize;			/* block size */
-	unsigned int nat_entries_per_block;	/* NAT entries in a block */
 	unsigned int addrs_per_inode;		/* addresses in an inode block */
-	unsigned int addrs_per_block;		/* addresses in a direct node block */
-	unsigned int nids_per_block;		/* node IDs in an indirect node block */
+	unsigned int addrs_per_block;		/* addresses in a direct node */
+	unsigned int nids_per_block;		/* node IDs in an indirect node */
+	unsigned int nat_entries_per_block;	/* NAT entries in a block */
 	unsigned int sit_entries_per_block;	/* SIT entries in a block */
 	unsigned int orphans_per_block;	/* orphan inodes in a block */
 	unsigned int dentries_per_block;	/* dentries in a block */
@@ -2258,14 +2258,11 @@ static inline struct f2fs_sb_info *F2FS_P_SB(struct page *page)
 	return F2FS_F_SB(page_folio(page));
 }
 
-#define SIT_ENTRY_PER_BLOCK(sbi)	((sbi)->sit_entries_per_block)
 #define NAT_ENTRY_PER_BLOCK(sbi)	((sbi)->nat_entries_per_block)
+#define SIT_ENTRY_PER_BLOCK(sbi)	((sbi)->sit_entries_per_block)
 #define DEF_ADDRS_PER_INODE_SBI(sbi)	((sbi)->addrs_per_inode)
 #define DEF_ADDRS_PER_BLOCK(sbi)	((sbi)->addrs_per_block)
 #define NIDS_PER_BLOCK(sbi)		((sbi)->nids_per_block)
-#define F2FS_ORPHANS_PER_BLOCK(sbi)	((sbi)->orphans_per_block)
-#define GET_ORPHAN_BLOCKS(sbi, n)	DIV_ROUND_UP((n), \
-					F2FS_ORPHANS_PER_BLOCK(sbi))
 #define CP_CHKSUM_OFFSET(sbi)		(F2FS_BLKSIZE(sbi) - sizeof(__le32))
 
 #define NODE_DIR1_BLOCK(sbi)		(DEF_ADDRS_PER_INODE_SBI(sbi) + 1)
@@ -2274,13 +2271,9 @@ static inline struct f2fs_sb_info *F2FS_P_SB(struct page *page)
 #define NODE_IND2_BLOCK(sbi)		(DEF_ADDRS_PER_INODE_SBI(sbi) + 4)
 #define NODE_DIND_BLOCK(sbi)		(DEF_ADDRS_PER_INODE_SBI(sbi) + 5)
 
-static inline struct f2fs_orphan_footer *
-f2fs_orphan_footer(void *orphan_block, struct f2fs_sb_info *sbi)
-{
-	return (struct f2fs_orphan_footer *)
-		((char *)orphan_block + sbi->blocksize -
-		 sizeof(struct f2fs_orphan_footer));
-}
+#define F2FS_ORPHANS_PER_BLOCK(sbi)	((sbi)->orphans_per_block)
+#define GET_ORPHAN_BLOCKS(sbi, n)	DIV_ROUND_UP((n), \
+					F2FS_ORPHANS_PER_BLOCK(sbi))
 
 static inline void make_dentry_ptr_block(struct inode *inode,
 				struct f2fs_dentry_ptr *d, void *t)
@@ -2299,15 +2292,79 @@ static inline void make_dentry_ptr_block(struct inode *inode,
 					SIZE_OF_DIR_ENTRY * entries;
 }
 
+static inline struct f2fs_orphan_footer *
+f2fs_orphan_footer(void *orphan_block, struct f2fs_sb_info *sbi)
+{
+	return (struct f2fs_orphan_footer *)
+		((char *)orphan_block + sbi->blocksize -
+		 sizeof(struct f2fs_orphan_footer));
+}
+
+static inline unsigned int f2fs_blocks_per_folio(struct f2fs_sb_info *sbi,
+						 const struct folio *folio)
+{
+	return folio_size(folio) >> sbi->log_blocksize;
+}
+
+static inline bool f2fs_has_subpage_blocks(struct f2fs_sb_info *sbi)
+{
+	return F2FS_BLKSIZE(sbi) < PAGE_SIZE;
+}
+
+static inline pgoff_t f2fs_folio_lblk(struct f2fs_sb_info *sbi,
+				      const struct folio *folio)
+{
+	return ((loff_t)folio->index << PAGE_SHIFT) >> sbi->log_blocksize;
+}
+
+static inline size_t f2fs_block_offset(struct f2fs_sb_info *sbi,
+				       unsigned int index)
+{
+	return (size_t)index << sbi->log_blocksize;
+}
+
+static inline pgoff_t f2fs_lblk_to_folio_index(struct f2fs_sb_info *sbi,
+					       pgoff_t index)
+{
+	return F2FS_BLK_TO_BYTES(sbi, index) >> PAGE_SHIFT;
+}
+
+static inline size_t f2fs_lblk_offset_in_folio(struct f2fs_sb_info *sbi,
+					       pgoff_t index)
+{
+	return F2FS_BLK_TO_BYTES(sbi, index) & (PAGE_SIZE - 1);
+}
+
+static inline void *f2fs_folio_lblk_address(struct f2fs_sb_info *sbi,
+					    struct folio *folio, pgoff_t index)
+{
+	return folio_address(folio) + f2fs_lblk_offset_in_folio(sbi, index);
+}
+
+static inline bool folio_has_ffs(const struct folio *folio)
+{
+	unsigned long private = (unsigned long)folio->private;
+
+	if (!private || (private & BIT(PAGE_PRIVATE_NOT_POINTER)) ||
+	    !folio->mapping)
+		return false;
+	return folio_size(folio) > F2FS_BLKSIZE(F2FS_F_SB(folio));
+}
+
 static inline struct f2fs_super_block *F2FS_RAW_SUPER(struct f2fs_sb_info *sbi)
 {
 	return (struct f2fs_super_block *)(sbi->raw_super);
 }
 
-#define F2FS_SUPER_BLOCK(sbi, folio, index)				\
-	((struct f2fs_super_block *)(folio_address(folio) +		\
-		(((size_t)index << (sbi)->log_blocksize) &		\
-		 (folio_size(folio) - 1))))
+static inline struct f2fs_super_block *
+F2FS_SUPER_BLOCK(struct f2fs_sb_info *sbi, struct folio *folio, pgoff_t index)
+{
+	unsigned long offset = (index << sbi->log_blocksize) &
+			(folio_size(folio) - 1);
+
+	return (struct f2fs_super_block *)
+		(folio_address(folio) + offset + F2FS_SUPER_OFFSET);
+}
 
 static inline struct f2fs_checkpoint *F2FS_CKPT(struct f2fs_sb_info *sbi)
 {
@@ -2332,7 +2389,8 @@ static inline struct f2fs_inode *F2FS_INODE(const struct folio *folio)
 
 static inline __le32 *F2FS_INODE_NIDS(const struct folio *folio)
 {
-	return folio_address(folio) + F2FS_BLKSIZE(F2FS_F_SB(folio)) - sizeof(struct node_footer) -
+	return folio_address(folio) + F2FS_BLKSIZE(F2FS_F_SB(folio)) -
+		sizeof(struct node_footer) -
 		SIZE_OF_I_NID;
 }
 

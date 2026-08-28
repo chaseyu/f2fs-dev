@@ -341,8 +341,8 @@ static bool sanity_check_inode(struct inode *inode, struct folio *node_folio)
 		(f2fs_has_inline_xattr(inode) &&
 		fi->i_inline_xattr_size < MIN_INLINE_XATTR_SIZE))) {
 		f2fs_warn(sbi, "%s: inode (ino=%llx) has corrupted i_inline_xattr_size: %d, min: %zu, max: %lu",
-			  __func__, inode->i_ino, fi->i_inline_xattr_size,
-			  MIN_INLINE_XATTR_SIZE, MAX_INLINE_XATTR_SIZE(inode));
+		  __func__, inode->i_ino, fi->i_inline_xattr_size,
+		  MIN_INLINE_XATTR_SIZE, MAX_INLINE_XATTR_SIZE(inode));
 		return false;
 	}
 
@@ -714,7 +714,7 @@ void f2fs_update_inode(struct inode *inode, struct folio *node_folio)
 	ri->i_gid = cpu_to_le32(i_gid_read(inode));
 	ri->i_links = cpu_to_le32(inode->i_nlink);
 	ri->i_blocks = cpu_to_le64(SECTOR_TO_BLOCK(sbi,
-					   READ_ONCE(inode->i_blocks)) + 1);
+						   READ_ONCE(inode->i_blocks)) + 1);
 
 	if (!f2fs_is_atomic_file(inode) ||
 			is_inode_flag_set(inode, FI_ATOMIC_COMMITTED))

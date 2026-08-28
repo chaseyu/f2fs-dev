@@ -13,8 +13,6 @@ static inline nid_t f2fs_start_nid(struct f2fs_sb_info *sbi, nid_t nid)
 	return (nid / entries) * entries;
 }
 
-#define	START_NID(sbi, nid) f2fs_start_nid(sbi, nid)
-
 /* node block offset on the NAT area dedicated to the given start node id */
 #define	NAT_BLOCK_OFFSET(sbi, start_nid) \
 	((start_nid) / NAT_ENTRY_PER_BLOCK(sbi))

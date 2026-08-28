@@ -855,10 +855,11 @@ static int f2fs_parse_param(struct fs_context *fc, struct fs_parameter *param)
 		break;
 	case Opt_inline_xattr_size:
 		if (result.int_32 < MIN_INLINE_XATTR_SIZE ||
-			result.int_32 > MAX_INLINE_XATTR_SIZE_FOR_BLOCKSIZE(F2FS_MIN_BLKSIZE)) {
-			f2fs_err(NULL, "inline xattr size is out of range: %u ~ %lu",
+			result.int_32 >
+			MAX_INLINE_XATTR_SIZE_FOR_BLOCKSIZE(F2FS_MAX_BLKSIZE)) {
+			f2fs_err(NULL, "inline xattr size is out of range: %u ~ %u",
 				 (u32)MIN_INLINE_XATTR_SIZE,
-				 MAX_INLINE_XATTR_SIZE_FOR_BLOCKSIZE(F2FS_MIN_BLKSIZE));
+				 (u32)MAX_INLINE_XATTR_SIZE_FOR_BLOCKSIZE(F2FS_MAX_BLKSIZE));
 			return -EINVAL;
 		}
 		ctx_set_opt(ctx, F2FS_MOUNT_INLINE_XATTR_SIZE);
@@ -1500,11 +1501,11 @@ static int f2fs_check_compression(struct fs_context *fc,
 }
 
 static int f2fs_check_opt_consistency(struct fs_context *fc,
-				      struct super_block *sb)
+						struct super_block *sb)
 {
 	struct f2fs_fs_context *ctx = fc->fs_private;
 	struct f2fs_sb_info *sbi = F2FS_SB(sb);
-	int err;
+	int err, min_size, max_size;
 
 	if (ctx_test_opt(ctx, F2FS_MOUNT_NORECOVERY) && !f2fs_readonly(sb))
 		return -EINVAL;
@@ -1604,6 +1605,15 @@ static int f2fs_check_opt_consistency(struct fs_context *fc,
 		}
 		if (!ctx_test_opt(ctx, F2FS_MOUNT_INLINE_XATTR) && !test_opt(sbi, INLINE_XATTR)) {
 			f2fs_err(sbi, "inline_xattr_size option should be set with inline_xattr option");
+			return -EINVAL;
+		}
+		min_size = MIN_INLINE_XATTR_SIZE;
+		max_size = MAX_INLINE_XATTR_SIZE_FOR_BLOCKSIZE(F2FS_BLKSIZE(sbi));
+
+		if (F2FS_OPTION(sbi).inline_xattr_size < min_size ||
+				F2FS_OPTION(sbi).inline_xattr_size > max_size) {
+			f2fs_err(sbi, "inline xattr size is out of range: %d ~ %d",
+				 min_size, max_size);
 			return -EINVAL;
 		}
 	}
@@ -3906,7 +3916,8 @@ loff_t max_file_blocks(struct f2fs_sb_info *sbi, struct inode *inode)
 	 * fit within U32_MAX + 1 data units.
 	 */
 
-	result = umin(result, F2FS_BYTES_TO_BLK(sbi, ((loff_t)U32_MAX + 1) * 4096));
+	result = umin(result, F2FS_BYTES_TO_BLK(sbi,
+						((loff_t)U32_MAX + 1) * 4096));
 
 	return result;
 }
@@ -4522,7 +4533,7 @@ static int f2fs_report_zone_cb(struct blk_zone *zone, unsigned int idx,
 {
 	struct f2fs_report_zones_args *rz_args = data;
 	block_t unusable_blocks = (zone->len - zone->capacity) >>
-					F2FS_LOG_SECTORS_PER_BLOCK(rz_args->sbi);
+			F2FS_LOG_SECTORS_PER_BLOCK(rz_args->sbi);
 
 	if (zone->type == BLK_ZONE_TYPE_CONVENTIONAL)
 		return 0;

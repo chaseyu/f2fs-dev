@@ -147,13 +147,12 @@ static struct folio *get_current_nat_folio(struct f2fs_sb_info *sbi, nid_t nid)
 
 static struct folio *get_next_nat_folio(struct f2fs_sb_info *sbi, nid_t nid)
 {
+	struct f2fs_nm_info *nm_i = NM_I(sbi);
 	struct folio *src_folio;
 	struct folio *dst_folio;
 	pgoff_t dst_off;
 	void *src_addr;
 	void *dst_addr;
-	struct f2fs_nm_info *nm_i = NM_I(sbi);
-
 	dst_off = next_nat_addr(sbi, current_nat_addr(sbi, nid));
 
 	/* get current nat block page with lock */
@@ -165,7 +164,7 @@ static struct folio *get_next_nat_folio(struct f2fs_sb_info *sbi, nid_t nid)
 
 	src_addr = folio_address(src_folio);
 	dst_addr = folio_address(dst_folio);
-	memcpy(dst_addr, src_addr, PAGE_SIZE);
+	memcpy(dst_addr, src_addr, F2FS_BLKSIZE(sbi));
 	folio_mark_dirty(dst_folio);
 	f2fs_folio_put(src_folio, true);
 
@@ -1200,9 +1199,7 @@ fail:
 }
 
 /*
- * All the node blocks actually belong to the inode will be released.
- * If the level is 0, we will simply truncate the dnode,
- * or else we should do dynamic truncate for the node pointers with the depth.
+ * All the block addresses of data and nodes should be nullified.
  */
 int f2fs_truncate_inode_blocks(struct inode *inode, pgoff_t from)
 {
@@ -2691,7 +2688,7 @@ static int __f2fs_build_free_nids(struct f2fs_sb_info *sbi,
 	f2fs_up_read_trace(&nm_i->nat_tree_lock, &lc);
 
 	f2fs_ra_meta_pages(sbi, NAT_BLOCK_OFFSET(sbi, nm_i->next_scan_nid),
-					nm_i->ra_nid_pages, META_NAT, false);
+				nm_i->ra_nid_pages, META_NAT, false);
 
 	return 0;
 }
